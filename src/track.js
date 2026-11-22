@@ -3,7 +3,9 @@ import { ECON } from './data.js';
 import { smoothstep, clamp } from './util.js';
 import { Vec3, CatmullRom } from './math.js';
 
-const MAX_GRADE = 0.06;
+export const MAX_GRADE = 0.06;
+// how far over a line's grade limit is still accepted (the default's 1 point; a tighter margin for a chosen limit)
+export const gradeTol = (lim) => lim < MAX_GRADE ? lim * 0.1 + 0.002 : 0.01;
 export const DOUBLE_OFF = 2.8;      // lateral offset of each line on double track
 export const PLATFORM2 = -9.2;      // local z of a station's second platform track
 export const SWITCH_LEN = 26;       // length over which tracks diverge at switches
@@ -86,7 +88,8 @@ export class TrackNetwork {
   }
 
   // ---------- planning ----------
-  plan(A, waypoints, B, double = false) {
+  plan(A, waypoints, B, double = false, maxGrade0 = MAX_GRADE) {
+    const LIM = Math.min(MAX_GRADE, maxGrade0); // the steepest grade allowed for this line (the player can ask for a flatter one)
     const t = this.terrain;
     const firstT = waypoints[0] || (B ? this.posOf(B) : null);
     if (!firstT) return null;
@@ -112,6 +115,7 @@ export class TrackNetwork {
     const heights = (extra) => {
       // over navigable water keep ~9 m clearance so ships can pass under the bridge
       const ys = ground.map(h => h < -1 ? 9 : Math.max(h, 2.5));
+      let G = LIM, need = 0; // (the grade the passes below keep to; with a chosen limit, the least these pins allow if steeper)
       const pinned = (i) => cum[i] <= ia.pinR ? ia.y : (ib && total - cum[i] <= ib.pinR ? ib.y : (extra ? extra.get(i) ?? null : null));
       for (let i = 0; i < ys.length; i++) { const p = pinned(i); if (p !== null) ys[i] = p; }
       const tmp = new Array(ys.length);
@@ -123,10 +127,27 @@ export class TrackNetwork {
         }
         for (let i = 0; i < ys.length; i++) ys[i] = tmp[i];
       }
-      for (let it = 0; it < 3; it++) {
-        for (let i = 1; i < ys.length; i++) { const ds = cum[i] - cum[i - 1]; if (pinned(i) === null) ys[i] = clamp(ys[i], ys[i - 1] - MAX_GRADE * ds, ys[i - 1] + MAX_GRADE * ds); }
-        for (let i = ys.length - 2; i >= 0; i--) { const ds = cum[i + 1] - cum[i]; if (pinned(i) === null) ys[i] = clamp(ys[i], ys[i + 1] - MAX_GRADE * ds, ys[i + 1] + MAX_GRADE * ds); }
+      // a flatter limit than the default: keep every point within reach of the pinned heights (the ends, crossings)
+      // at that grade, so the line climbs evenly instead of saving the climb for one step next to a station.
+      // (Only then: lines at the default limit are planned exactly as before — saves, replays and the AI rely on it.)
+      if (LIM < MAX_GRADE) {
+        const pins = []; for (let i = 0; i < ys.length; i++) { const p = pinned(i); if (p !== null && (pinned(i - 1) === null || pinned(i + 1) === null || i === 0 || i === ys.length - 1)) pins.push([cum[i], p]); }
+        // (pinned heights too far apart for the limit: climb evenly at the least grade that joins them)
+        let L = LIM; for (const [c1, y1] of pins) for (const [c2, y2] of pins) if (c2 > c1 + 1) L = Math.max(L, Math.abs(y2 - y1) / (c2 - c1) * 1.001);
+        if (L > LIM) need = Math.max(need, L);
+        G = L;
+        for (let i = 0; i < ys.length; i++) {
+          if (pinned(i) !== null) continue;
+          let lo = -Infinity, hi = Infinity;
+          for (const [c, y] of pins) { const r = L * Math.abs(cum[i] - c); lo = Math.max(lo, y - r); hi = Math.min(hi, y + r); }
+          ys[i] = clamp(ys[i], lo, hi);
+        }
       }
+      for (let it = 0; it < 3; it++) {
+        for (let i = 1; i < ys.length; i++) { const ds = cum[i] - cum[i - 1]; if (pinned(i) === null) ys[i] = clamp(ys[i], ys[i - 1] - G * ds, ys[i - 1] + G * ds); }
+        for (let i = ys.length - 2; i >= 0; i--) { const ds = cum[i + 1] - cum[i]; if (pinned(i) === null) ys[i] = clamp(ys[i], ys[i + 1] - G * ds, ys[i + 1] + G * ds); }
+      }
+      ys.need = need;
       return ys;
     };
     let ys = heights(null), bad = null;
@@ -136,7 +157,7 @@ export class TrackNetwork {
     if (X && X.pins.size) {
       // meet the other tracks' height at level crossings, where the grade limit allows
       const lv = heights(X.pins);
-      let ok = true; for (let i = 1; i < lv.length && ok; i++) ok = Math.abs(lv[i] - lv[i - 1]) <= (MAX_GRADE + 0.01) * Math.max(0.01, cum[i] - cum[i - 1]);
+      let ok = true; for (let i = 1; i < lv.length && ok; i++) ok = Math.abs(lv[i] - lv[i - 1]) <= (LIM + gradeTol(LIM)) * Math.max(0.01, cum[i] - cum[i - 1]);
       if (ok) ys = lv;
       else for (const x of X.list) if (x.mode === 'level') {
         // not levelled: a small mismatch still makes a diamond; well above the other track it bridges over; else no
@@ -146,19 +167,21 @@ export class TrackNetwork {
       }
       bad = X.bad;
     }
-    let bridgeLen = 0, earth = 0, maxGrade = 0;
-    const bridge = [];
+    let bridgeLen = 0, earth = 0, maxGrade = 0, cutLen = 0;
+    const bridge = [], cut = [];
     for (let i = 0; i < pts.length; i++) {
       pts[i].y = ys[i];
       const ds = i ? cum[i] - cum[i - 1] : 0;
       const isBridge = ground[i] < 0.8 || ys[i] - ground[i] > 7 || (X ? X.forced.has(i) : false);
       bridge.push(isBridge);
+      const isCut = !isBridge && ground[i] - ys[i] > 4; cut.push(isCut); if (isCut) cutLen += ds;
       if (isBridge) bridgeLen += ds; else earth += Math.abs(ys[i] - ground[i]) * ds;
       if (i) maxGrade = Math.max(maxGrade, Math.abs(ys[i] - ys[i - 1]) / Math.max(0.01, ds));
       if (!t.inBounds(pts[i].x, pts[i].z, 15)) bad = 'Track leaves the map';
     }
     if (X && !bad) bad = this.checkClearance(X, pts, bridge);
-    if (maxGrade > MAX_GRADE + 0.01) bad = `Too steep (${(maxGrade * 100).toFixed(0)}% grade, max ${MAX_GRADE * 100}%) — add waypoints for a longer route`;
+    const need = ys.need || 0;
+    if (maxGrade > LIM + gradeTol(LIM)) bad = LIM < MAX_GRADE ? (need > LIM ? `The ends are too far apart in height for ${+(LIM * 100).toFixed(1)}%: this line needs at least ${(need * 100).toFixed(1)}% — allow a steeper grade (+) or route it longer` : `Can’t keep to ${+(LIM * 100).toFixed(1)}% here (${(maxGrade * 100).toFixed(1)}%) — allow a steeper grade (+) or add waypoints`) : `Too steep (${(maxGrade * 100).toFixed(0)}% grade, max ${MAX_GRADE * 100}%) — add waypoints for a longer route`;
     if (A.type === 'jc' && A.bad) bad = A.bad;
     if (B && B.type === 'jc' && B.bad) bad = B.bad;
     if (B && B === A) bad = 'Pick a different station';
@@ -173,7 +196,7 @@ export class TrackNetwork {
     const switches = (A.type === 'jc' ? 1 : 0) + (B && B.type === 'jc' ? 1 : 0);
     const levels = X ? X.list.filter(x => x.mode === 'level') : [];
     const cost = Math.round((total * ECON.trackPerUnit + bridgeLen * ECON.bridgePerUnit + earth * 6) * k + switches * JUNCTION_COST) + levels.length * XING.cost;
-    return { pts, cum, total, bridge, bridgeLen, cost, maxGrade, bad, a: A, b: B, sideA: ia.side, sideB: ib ? ib.side : 0, double, switches,
+    return { pts, cum, total, bridge, bridgeLen, cut, cutLen, ground, limit: LIM, need, cost, maxGrade, bad, a: A, b: B, sideA: ia.side, sideB: ib ? ib.side : 0, double, switches,
       crossings: levels.map(x => ({ owner: x.e.owner, d: x.d, s: x.s })), flyovers: X ? X.list.length - levels.length : 0 };
   }
 

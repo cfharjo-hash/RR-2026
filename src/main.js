@@ -3,7 +3,7 @@ import { MapControls } from 'three/addons/controls/MapControls.js';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { TerrainView } from './view/terrainView.js';
 import { WorldView } from './view/worldView.js';
-import { JUNCTION_COST, SIGNAL_COST } from './track.js';
+import { JUNCTION_COST, SIGNAL_COST, MAX_GRADE } from './track.js';
 import { createGame, generateMap, newGame } from './setup.js';
 import { TrackView } from './view/trackView.js';
 import { VehicleView } from './view/vehicleView.js';
@@ -183,7 +183,10 @@ const snapMark = new THREE.Mesh(new THREE.TorusGeometry(7, 0.9, 6, 32), new THRE
 snapMark.rotation.x = Math.PI / 2; snapMark.renderOrder = 11; snapMark.visible = false; scene.add(snapMark);
 const showSnap = (o) => { snapMark.visible = !!o; if (o) { const q = o.p || o; snapMark.position.set(q.x, (q.y ?? terrain.heightAt(q.x, q.z)) + 2, q.z); } };
 
-const tool = { mode: 'select', angle: 0, from: null, wps: [], plan: null, hover: null, orders: [], buy: null, double: false };
+const tool = { mode: 'select', angle: 0, from: null, wps: [], plan: null, hover: null, orders: [], buy: null, double: false, grade: MAX_GRADE };
+// the grade limits the track tool offers ( [ flatter, ] steeper ): flatter lines cost more (cuttings, embankments,
+// bridges) but loaded trains climb them much faster
+const GRADES = [0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05, MAX_GRADE];
 
 // Snap-style laying: the next point turns from the line so far by whole 7.5° steps (up to 45° for track, 60° for
 // roads), and runs straight ahead when the turn is small; so every click gives a smooth curve that can be built.
@@ -220,6 +223,12 @@ const api = {
     tool.mode = m; tool.from = null; tool.wps = []; tool.plan = null; tool.orders = [];
     trackView.showPreview(null); roadView.showPreview(null); showSnap(null); ghost.visible = false; ring.visible = false; refreshWps();
     ui.setToolUI(m);
+  },
+  // one step flatter (-1) or steeper (+1)
+  setGrade(step) {
+    const i = GRADES.indexOf(tool.grade), j = Math.max(0, Math.min(GRADES.length - 1, (i < 0 ? GRADES.length - 1 : i) + step));
+    tool.grade = GRADES[j]; ui.setToolUI(tool.mode);
+    if (tool.mode === 'track') onMove({ clientX: lastMouse.x, clientY: lastMouse.y, target: renderer.domElement });
   },
   follow: null,
   view() { return { target: controls.target.toArray().map(Math.round), camera: camera.position.toArray().map(Math.round) }; },
@@ -328,16 +337,16 @@ function onMove(e) {
     const end = trackEnd(s, jc);
     if (!end) showSnap(null);
     let plan;
-    if (end) plan = net.plan(tool.from, tool.wps, end, tool.double);
-    else if (p) plan = net.plan(tool.from, [...tool.wps, snapPoint(p)], null, tool.double);
+    if (end) plan = net.plan(tool.from, tool.wps, end, tool.double, tool.grade);
+    else if (p) plan = net.plan(tool.from, [...tool.wps, snapPoint(p)], null, tool.double, tool.grade);
     tool.plan = plan && plan.b ? plan : null;
     trackView.showPreview(plan);
     if (plan) {
       const miles = (plan.total / ECON.unitsPerMile).toFixed(1);
       const kind = tool.double ? 'Double track' : 'Single track';
       const msg = plan.b
-        ? `${kind} to <b>${end.type === 'station' ? end.name : 'new junction'}</b>: ${miles} mi · <b>${money(game.trackCost(plan))}</b>${(() => { const gr = game.frontier.grantFor(plan, game.trackCost(plan)); return gr ? ` <span class="ok">− land grant ${money(gr)}</span>` : ''; })()} · max grade ${(plan.maxGrade * 100).toFixed(1)}%${plan.bridgeLen > 0 ? ` · bridges ${Math.round(plan.bridgeLen)} m` : ''}${plan.crossings?.length ? ` · ${plan.crossings.length} level crossing${plan.crossings.length > 1 ? 's' : ''}${game.crossingFees(plan).length ? ` (fees ${game.crossingFees(plan).map(f => `${money(f.amount)} to ${game.comp(f.owner).name}`).join(', ')})` : ''}` : ''}${plan.flyovers ? ` · ${plan.flyovers} flyover${plan.flyovers > 1 ? 's' : ''}` : ''}${plan.bad ? `<br><span class="bad">${plan.bad}</span>` : '<br>Click to build'}`
-        : `${kind} · ${miles} mi so far · click to add a point; click a station or a track to finish${plan.bad ? `<br><span class="bad">${plan.bad}</span>` : ''}<br><small>Points snap to smooth curves (Shift: free) · right-click: undo point · G: single/double · Esc: cancel</small>`;
+        ? `${kind} to <b>${end.type === 'station' ? end.name : 'new junction'}</b>: ${miles} mi · <b>${money(game.trackCost(plan))}</b>${(() => { const gr = game.frontier.grantFor(plan, game.trackCost(plan)); return gr ? ` <span class="ok">− land grant ${money(gr)}</span>` : ''; })()} · grade ${(plan.maxGrade * 100).toFixed(1)}% <small>(limit ${+(tool.grade * 100).toFixed(1)}%)</small>${plan.bridgeLen > 0 ? ` · bridges ${Math.round(plan.bridgeLen)} m` : ''}${plan.cutLen > 0 ? ` · cuttings ${Math.round(plan.cutLen)} m` : ''}${plan.crossings?.length ? ` · ${plan.crossings.length} level crossing${plan.crossings.length > 1 ? 's' : ''}${game.crossingFees(plan).length ? ` (fees ${game.crossingFees(plan).map(f => `${money(f.amount)} to ${game.comp(f.owner).name}`).join(', ')})` : ''}` : ''}${plan.flyovers ? ` · ${plan.flyovers} flyover${plan.flyovers > 1 ? 's' : ''}` : ''}${ui.profileSvg(plan)}${plan.bad ? `<span class="bad">${plan.bad}</span>` : 'Click to build'}`
+        : `${kind} · ${miles} mi so far · ${money(game.trackCost(plan))} · grade ${(plan.maxGrade * 100).toFixed(1)}% <small>(limit ${+(tool.grade * 100).toFixed(1)}%)</small>${plan.bridgeLen > 0 ? ` · bridges ${Math.round(plan.bridgeLen)} m` : ''}${plan.cutLen > 0 ? ` · cuttings ${Math.round(plan.cutLen)} m` : ''}${ui.profileSvg(plan)}${plan.bad ? `<span class="bad">${plan.bad}</span><br>` : ''}click to add a point; click a station or a track to finish<br><small>Points snap to smooth curves (Shift: free) · <b>−/+</b> flatter/steeper grade · right-click: undo point · G: single/double · Esc: cancel</small>`;
       ui.tooltip(msg, e.clientX, e.clientY);
     }
   } else if (tool.mode === 'depot') {
@@ -373,9 +382,11 @@ function onMove(e) {
 }
 
 let down = null;
-renderer.domElement.addEventListener('pointerdown', e => { down = { x: e.clientX, y: e.clientY, b: e.button }; });
+renderer.domElement.addEventListener('pointerdown', e => { down = { x: e.clientX, y: e.clientY, b: e.button, moved: 0 }; });
+// (a right-drag turns the camera: it is not a right-click, even if it ends where it began)
+renderer.domElement.addEventListener('pointermove', e => { if (down) down.moved = Math.max(down.moved, Math.hypot(e.clientX - down.x, e.clientY - down.y)); });
 renderer.domElement.addEventListener('pointerup', e => {
-  if (down && down.b === 2 && Math.hypot(e.clientX - down.x, e.clientY - down.y) <= 5) { down = null; undoStep(); return; }
+  if (down && down.b === 2 && down.moved <= 5 && Math.hypot(e.clientX - down.x, e.clientY - down.y) <= 5) { down = null; undoStep(); return; }
   if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5 || down.b !== 0) { down = null; return; }
   down = null; onClick(e);
 });
@@ -383,13 +394,16 @@ renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
 addEventListener('pointermove', onMove);
 renderer.domElement.addEventListener('pointermove', e => { if (down && down.b === 0 && api.follow && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) api.follow = null; });
 
-// right-click: take back the last thing laid out (a track or road point, then the start; a route's last stop)
+// right-click steps back, one thing at a time, all the way to Inspect: a track or road point, then the start, then
+// the tool itself; a route's last stop, then the route; any other tool; then the open panel
 function undoStep() {
-  if (tool.mode === 'track' || tool.mode === 'road') {
+  if ((tool.mode === 'track' || tool.mode === 'road') && (tool.wps.length || tool.from)) {
     if (tool.wps.length) { tool.wps.pop(); refreshWps(); ui.toast('Point removed'); }
-    else if (tool.from) { tool.from = null; trackView.showPreview(null); roadView.showPreview(null); showSnap(null); ui.toast('Plan cancelled'); }
+    else { tool.from = null; trackView.showPreview(null); roadView.showPreview(null); showSnap(null); ui.toast('Plan cancelled'); }
     onMove({ clientX: lastMouse.x, clientY: lastMouse.y, target: renderer.domElement });
   } else if (tool.mode === 'train' && tool.orders.length) { tool.orders.pop(); ui.updateOrders(); }
+  else if (tool.mode !== 'select') { api.setTool('select'); ui.toast('Inspect'); }
+  else { api.follow = null; ui.inspect(null); }
 }
 function onClick(e) {
   const p = terrainPoint(e);
@@ -417,7 +431,7 @@ function onClick(e) {
       }
       const end = trackEnd(s, jc);
       if (end) {
-        const plan = net.plan(tool.from, tool.wps, end, tool.double);
+        const plan = net.plan(tool.from, tool.wps, end, tool.double, tool.grade);
         const r = game.buildTrack(plan);
         if (typeof r === 'string') { ui.toast(r, true); return; }
         tool.wps = []; refreshWps(); trackView.showPreview(null);
@@ -495,6 +509,7 @@ function onKey(e) {
   else if (k === 'k' && FEATURES.roads) ui.openBuyRoad();
   else if (k === 'x') api.setTool('bulldoze');
   else if (k === 'n') api.setTool('signal');
+  else if (['[', ']', '-', '+', '='].includes(k) && tool.mode === 'track' && !e.ctrlKey && !e.metaKey && !e.altKey) api.setGrade(k === '[' || k === '-' ? -1 : 1); // (− and + for keyboards where [ ] need AltGr)
   else if (k === 'g') { tool.double = !tool.double; ui.setToolUI(tool.mode); if (tool.mode === 'track') onMove({ clientX: lastMouse.x, clientY: lastMouse.y, target: renderer.domElement }); }
   else if (k === 'p') ui.openChain();
   else if (k === 'l') ui.openLedger();

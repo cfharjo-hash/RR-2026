@@ -24,23 +24,27 @@ const signalPostMat = new THREE.MeshStandardMaterial({ vertexColors: true, rough
 const lightGeo = new THREE.SphereGeometry(0.26, 10, 8);
 const diamondGeo = new THREE.BoxGeometry(7.5, 0.12, 7.5), diamondMat = new THREE.MeshStandardMaterial({ color: '#4a4038', roughness: 0.9 });
 // the planning preview: a ribbon coloured along its length by grade (green on the flat, yellow, orange near the
-// limit, red beyond), so you see where a route is too steep; the tooltip says why a plan is refused
+// limit, red beyond), so you see where a route is too steep; bridges are drawn blue and wider, cuttings purple;
+// the tooltip says why a plan is refused and shows the line's side view
 const previewMatGrade = new THREE.MeshBasicMaterial({ vertexColors: true, depthTest: false, transparent: true, opacity: 0.85, side: THREE.DoubleSide });
-export function gradeLine(pts, max, refused = false) {
+const BRIDGE_C = new THREE.Color('#5fb4ff'), CUT_C = new THREE.Color('#d77cff');
+export function gradeLine(pts, max, refused = false, bridge = null, cut = null) {
   const pos = [], col = [], idx = [], c = new THREE.Color();
   pts.forEach((p, i) => {
     const a = pts[Math.max(0, i - 2)], b = pts[Math.min(pts.length - 1, i + 2)];
     const run = Math.hypot(b.x - a.x, b.z - a.z) || 1, gr = Math.abs(b.y - a.y) / run / max; // share of the limit
     c.setHSL(gr > 1.02 ? 0 : 0.33 - 0.25 * Math.min(1, gr) ** 1.5, 0.95, 0.52); // green → yellow → orange at the limit; red beyond
+    if (gr <= 1.02 && bridge?.[i]) c.copy(BRIDGE_C); else if (gr <= 1.02 && cut?.[i]) c.copy(CUT_C);
+    const w = bridge?.[i] ? 3.2 : 2;
     const tx = (b.x - a.x) / run, tz = (b.z - a.z) / run;
-    for (const s of [-2, 2]) { pos.push(p.x - tz * s, p.y + 1.4, p.z + tx * s); col.push(c.r, c.g, c.b); }
+    for (const s of [-w, w]) { pos.push(p.x - tz * s, p.y + 1.4, p.z + tx * s); col.push(c.r, c.g, c.b); }
     if (i) { const k = i * 2; idx.push(k - 2, k - 1, k, k - 1, k + 1, k); }
   });
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3)); g.setIndex(idx);
   return g;
 }
-export function gradePreview(pts, max, refused) { const m = new THREE.Mesh(gradeLine(pts, max, refused), previewMatGrade); m.renderOrder = 10; return m; }
+export function gradePreview(pts, max, refused, bridge, cut) { const m = new THREE.Mesh(gradeLine(pts, max, refused, bridge, cut), previewMatGrade); m.renderOrder = 10; return m; }
 export const LIGHT_RED = new THREE.Color('#ff2a1a'), LIGHT_GREEN = new THREE.Color('#38ff6a');
 
 function ribbon(pts, profile, i0 = 0, i1 = pts.length - 1, uvScale = 0.25) {
@@ -104,7 +108,7 @@ export class TrackView {
   showPreview(plan) {
     if (this.preview) { this.scene.remove(this.preview); this.preview.geometry.dispose(); this.preview = null; }
     if (!plan) return;
-    this.preview = gradePreview(plan.pts, 0.06, !!plan.bad);
+    this.preview = gradePreview(plan.pts, plan.limit ?? 0.06, !!plan.bad, plan.bridge, plan.cut);
     this.preview.renderOrder = 10;
     this.scene.add(this.preview);
   }

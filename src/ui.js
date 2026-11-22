@@ -8,7 +8,7 @@ import { SAVE_VERSION, LEVEL_MUL } from './sim.js';
 import { FIN } from './finance.js';
 import { MARKET } from './market.js';
 import { RATEWAR } from './ratewars.js';
-import { XING } from './track.js';
+import { XING, gradeTol } from './track.js';
 
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html !== undefined) e.innerHTML = html; return e; };
@@ -70,14 +70,38 @@ export class UI {
     $('#orders').classList.toggle('hide', m !== 'train');
     const hints = {
       select: '', station: 'Station: click to place · <b>R/Q</b> rotate · yellow ring = catchment',
-      track: `${this.api.tool.double ? '<b>DOUBLE</b>' : '<b>SINGLE</b>'} track (G to switch): click a station or a track (junction), click points (they snap to smooth curves; Shift: free), click a station or a track · <b>right-click</b> undo · <b>Esc</b> cancel · to double an existing line, click it with Inspect (Esc)`,
+      track: `${this.api.tool.double ? '<b>DOUBLE</b>' : '<b>SINGLE</b>'} track (G to switch) · max grade <button class="gr" data-gr="-1" title="Flatter (−)">−</button><b>${+(this.api.tool.grade * 100).toFixed(1)}%</b><button class="gr" data-gr="1" title="Steeper (+)">+</button> <small>(flatter: faster loaded trains, more bridges and cuttings)</small><br>Click a station or a track (junction), click points (they snap; Shift: free), click a station or a track · <b>right-click</b> steps back to Inspect · to double an existing line, click it with Inspect`,
       signal: 'Signal: click a track to split it into blocks — most useful on double track',
       road: 'Road: click one of your stations or depots (or a road), click points (they snap; Shift: free), click a stop or a road · roads are public · <b>right-click</b> undo · <b>Esc</b> cancel',
       depot: 'Road depot: click to place a small road stop (ring = catchment), then join it to a station or depot with a road (R)',
       train: 'Route: click stations in the order the train should visit', bulldoze: 'Bulldoze: click a track, a signal, a station (with its track) or one of your roads to remove it',
     };
     $('#hint').innerHTML = hints[m] || ''; $('#hint').classList.toggle('hide', !hints[m]);
+    $('#hint').querySelectorAll('[data-gr]').forEach(b => b.onclick = () => this.api.setGrade(+b.dataset.gr));
     if (m !== 'select') this.tooltip(null);
+  }
+
+  // a side view of a planned line for the track tooltip: the ground (water in blue), the track on it, bridges in blue,
+  // cuttings in purple, stretches steeper than the limit in red
+  profileSvg(plan) {
+    const { pts, cum, ground, bridge, cut } = plan;
+    if (!ground || pts.length < 3) return '';
+    const W = 260, H = 58, n = Math.min(pts.length, 130), idx = Array.from({ length: n }, (_, k) => Math.round(k / (n - 1) * (pts.length - 1)));
+    const ys = idx.map(i => pts[i].y), gs = idx.map(i => ground[i]);
+    let lo = Math.min(0, ...ys, ...gs), hi = Math.max(...ys, ...gs);
+    if (hi - lo < 20) { const m = (hi + lo) / 2; lo = m - 10; hi = m + 10; }
+    const total = cum[cum.length - 1] || 1, X = (i) => (cum[i] / total * (W - 4) + 2).toFixed(1), Y = (h) => (H - 4 - (h - lo) / (hi - lo) * (H - 10)).toFixed(1);
+    const land = `M2,${H} ` + idx.map(i => `L${X(i)},${Y(Math.max(0, ground[i]))}`).join(' ') + ` L${W - 2},${H} Z`;
+    const water = idx.some(i => ground[i] < 0.8) ? idx.map((i, k) => ground[i] < 0.8 ? `<rect x="${X(i)}" y="${Y(0)}" width="${(W / n + 1).toFixed(1)}" height="${(H - +Y(0)).toFixed(1)}" fill="#3d7ab3"/>` : '').join('') : '';
+    let segs = '';
+    for (let k = 1; k < n; k++) {
+      const a = idx[k - 1], b = idx[k], run = Math.max(0.01, cum[b] - cum[a]), steep = Math.abs(pts[b].y - pts[a].y) / run > plan.limit + gradeTol(plan.limit);
+      const col = steep ? '#ff4a3a' : bridge[a] || bridge[b] ? '#5fb4ff' : cut[a] || cut[b] ? '#d77cff' : '#7dff8a';
+      segs += `<line x1="${X(a)}" y1="${Y(pts[a].y)}" x2="${X(b)}" y2="${Y(pts[b].y)}" stroke="${col}" stroke-width="${bridge[a] ? 3.2 : 2.2}"/>`;
+      if (bridge[a] && k % 4 === 0) segs += `<line x1="${X(a)}" y1="${Y(pts[a].y)}" x2="${X(a)}" y2="${Y(Math.max(0, ground[a]))}" stroke="#5fb4ff" stroke-width="1" opacity=".7"/>`;
+    }
+    const key = [plan.bridgeLen > 0 ? '<i style="background:#5fb4ff"></i>bridge' : '', plan.cutLen > 0 ? '<i style="background:#d77cff"></i>cutting' : '', plan.maxGrade > plan.limit + gradeTol(plan.limit) ? '<i style="background:#ff4a3a"></i>too steep' : ''].filter(Boolean).join(' ');
+    return `<div class="profile"><svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><path d="${land}" fill="#6b5a40"/>${water}${segs}</svg><div class="pkey">${Math.round(lo)}–${Math.round(hi)} m ${key}</div></div>`;
   }
 
   topbar() {
@@ -207,20 +231,36 @@ export class UI {
     this.styleStation(e, st);
     $('#labels').append(e); this.labels.push({ e, o: st, kind: 'sta' });
   }
-  // passengers and mail waiting at a station, on its map label (amber when storage is filling, red when full and
-  // being lost); only close up, and only where there is a town or something waiting
+  // cargo waiting at a station, on its map label: passengers and mail (where a town is covered), then every other
+  // cargo in store as a coloured chip and its units (amber when storage is filling, red when full and being lost);
+  // only close up. (The station panel names them.)
   stationCounter(l, d) {
-    const g = this.game, st = l.o, near = d < 1300;
-    const parts = near ? [['passengers', '👤'], ['mail', '✉']].map(([c, icon]) => {
+    const g = this.game, st = l.o, near = d < 1800;
+    const cargos = new Set(near ? [...(st.cov.towns.length ? ['passengers', 'mail'] : []), ...Object.keys(st.waiting || {}), ...(st.transfer || []).map(x => x.c)] : []);
+    const parts = [...cargos].map(c => {
       const n = g.stored(st, c);
-      if (n < 0.5 && !st.cov.towns.length) return null;
-      const f = n / g.storageCap(st, c);
-      return { html: `<span class="${f >= 0.98 ? 'full' : f >= 0.7 ? 'warn' : ''}">${icon}${Math.round(n)}</span>` };
-    }).filter(Boolean) : [];
+      if (n < 0.5 && c !== 'passengers' && c !== 'mail') return null;
+      const f = n / g.storageCap(st, c), cls = f >= 0.98 ? 'full' : f >= 0.7 ? 'warn' : '';
+      const icon = c === 'passengers' ? '👤' : c === 'mail' ? '✉' : `<i style="background:${CARGO[c]?.color || '#999'}"></i>`;
+      return { n, c, html: `<span class="${cls}" title="${CARGO[c]?.name || c}">${icon}${Math.round(n)}</span>` };
+    }).filter(Boolean).sort((a, b) => (b.c === 'passengers') - (a.c === 'passengers') || (b.c === 'mail') - (a.c === 'mail') || b.n - a.n).slice(0, 7);
     const key = st.name + '|' + parts.map(p => p.html).join('');
     if (l.key === key) return;
     l.key = key;
     l.e.innerHTML = parts.length ? `${st.name}<em class="cnt">${parts.map(p => p.html).join('')}</em>` : st.name;
+  }
+  // what an industry made last month, on its map label (close up): each output with units/month and the share hauled
+  industryCounter(l, d) {
+    const i = l.o, out = Object.keys(i.def.out), near = d < 1100;
+    const parts = near ? out.map(c => {
+      const p = Math.round(i.producedLastMonth?.[c] || 0), t = i.transportedLastMonth?.[c] || 0;
+      return `<span title="${CARGO[c]?.name || c}: ${p} made last month, ${Math.round(t)} hauled away"><i style="background:${CARGO[c]?.color || '#999'}"></i>${p}/mo${p ? `<small>${Math.round(Math.min(1, t / p) * 100)}% hauled</small>` : ''}</span>`;
+    }) : [];
+    const key = parts.join('');
+    if (l.key === key) return;
+    l.key = key;
+    const c0 = out[0];
+    l.e.innerHTML = `<i style="background:${i.def.color || CARGO[c0].color}"></i>${i.name}${parts.length ? `<em class="cnt">${key}</em>` : ''}`;
   }
   frame(dt) {
     const cam = this.api.camera, v = new THREE.Vector3();
@@ -250,6 +290,7 @@ export class UI {
         if (big) { const far = d > 4500, bg = !!(o.city || o.pop >= 8000); if (l.far !== far || l.big !== bg) { l.far = far; l.big = bg; l.e.classList.toggle('far', far); l.e.classList.toggle('big', bg); } }
       }
       else if (l.kind === 'sta' && (l.tick = (l.tick || 0) + 1) % 12 === 1) this.stationCounter(l, d);
+      else if (l.kind === 'ind' && (l.tick = (l.tick || 0) + 1) % 30 === 1) this.industryCounter(l, d);
       // (the DOM is written only when a label moves or fades: style writes are the cost here)
       const px = Math.round((v.x + 1) / 2 * W), py = Math.round((1 - v.y) / 2 * H);
       if (px !== l.px || py !== l.py) { l.px = px; l.py = py; l.e.style.transform = `translate(-50%,-100%) translate(${px}px,${py}px)`; }
