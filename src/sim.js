@@ -192,7 +192,7 @@ export class Game {
   // ---- changing a train's wagons: done at its next stop, after unloading; wagons that go are sold at half price ----
   consistCost(tr, consist) {
     const have = {}, want = {};
-    for (const w of tr.wagons) have[w.type] = (have[w.type] || 0) + 1;
+    for (const t of this.baseOf(tr)) have[t] = (have[t] || 0) + 1; // (what it owns, whatever the yard swapped in)
     for (const t of consist) want[t] = (want[t] || 0) + 1;
     let buy = 0, sell = 0, bought = 0, sold = 0;
     for (const t of new Set([...Object.keys(have), ...Object.keys(want)])) {
@@ -207,7 +207,7 @@ export class Game {
     if (!consist || !consist.length) return 'Keep at least one wagon';
     if (consist.length > max) return `${tr.loco.name} pulls at most ${max} wagons`;
     if (consist.some(t => !WAGONS[t] || WAGONS[t].air || WAGONS[t].road || WAGONS[t].year > this.year)) return 'Wagon not available yet';
-    const same = consist.length === tr.wagons.length && consist.every((t, i) => t === tr.wagons[i].type);
+    const base = this.baseOf(tr), same = consist.length === base.length && consist.every((t, i) => t === base[i]);
     if (same) { tr.newConsist = null; this.emit('changed'); return null; }
     const c = this.consistCost(tr, consist);
     if (c.net > 0 && !this.canAfford(c.net)) return 'Not enough money';
@@ -227,11 +227,61 @@ export class Game {
     this.ownerOf(tr).cash += c.sell;
     tr.value = Math.max(Math.round(tr.value * 0.2), tr.value + c.buy - c.sell * 2); // (the wagons sold took their purchase price with them)
     tr.len = LOCO_LEN + tr.wagons.length * WAGON_LEN;
+    if (tr.base) tr.base = [...consist];
     this.view?.consistChanged?.(tr);
-    const names = Object.entries(tr.wagons.reduce((o, w) => (o[w.type] = (o[w.type] || 0) + 1, o), {})).map(([t, n]) => `${n} ${WAGONS[t].name.toLowerCase()}${n > 1 ? 's' : ''}`).join(', ');
+    const names =Object.entries(tr.wagons.reduce((o, w) => (o[w.type] = (o[w.type] || 0) + 1, o), {})).map(([t, n]) => `${n} ${WAGONS[t].name.toLowerCase()}${n > 1 ? 's' : ''}`).join(', ');
     const gone = Object.entries(lost).map(([k, u]) => `${Math.round(u)} ${CARGO[k].unit} of ${CARGO[k].name.toLowerCase()}`).join(', ');
     this.newsFor(this.ownerOf(tr), `🔧 ${tr.name} now runs ${names}${c.net ? ` (${c.net > 0 ? 'cost' : 'refund'} ${money(Math.abs(c.net))})` : ''}${gone ? ` — ${gone} in the wagons that went was lost` : ''}`);
   }
+  // ---- the yard: a train may leave each stop with its own set of wagons (a free swap, a little extra stop time) ----
+  // A train owns its bought set (`base`: what Change wagons buys and sells); a stop's set uses at most that many
+  // wagons. `plan[i]` is the set it leaves stop i with (null: as it arrived).
+  baseOf(tr) { return tr.base || tr.wagons.map(w => w.type); }
+  setStopConsist(tr, i, consist) {
+    if (!this.mine(tr) || tr.type !== 'train') return 'Not your train';
+    if (!(i >= 0 && i < tr.orders.length)) return 'No such stop';
+    if (consist) {
+      const n = this.baseOf(tr).length;
+      if (!consist.length) return 'Keep at least one wagon';
+      if (consist.length > n) return `${tr.name} owns ${n} wagon${n > 1 ? 's' : ''}: buy more with Change wagons`;
+      if (consist.some(t => !WAGONS[t] || WAGONS[t].air || WAGONS[t].road || WAGONS[t].year > this.year)) return 'Wagon not available yet';
+    }
+    if (!tr.base) tr.base = this.baseOf(tr);
+    tr.plan ||= tr.orders.map(() => null);
+    tr.plan[i] = consist ? [...consist] : null;
+    if (tr.plan.every(p => !p)) { tr.plan = null; if (tr.base.length === tr.wagons.length && tr.base.every((t, k) => t === tr.wagons[k].type)) tr.base = null; }
+    this.emit('changed');
+    return null;
+  }
+  // swap to this stop's set: wagons of a kind it keeps stay (with their load); a wagon that goes to the yard
+  // leaves its load in the station's storage (paid to whoever carries it on) or, with no room, loses it
+  yardSwap(tr, st, want) {
+    want = want.slice(0, this.baseOf(tr).length);
+    if (want.length === tr.wagons.length && want.every((t, k) => t === tr.wagons[k].type)) return 0;
+    const pool = [...tr.wagons];
+    let added = 0;
+    tr.wagons = want.map(type => { const i = pool.findIndex(w => w.type === type); if (i >= 0) return pool.splice(i, 1)[0]; added++; return { type, cargo: null, units: 0, origin: null, day: 0 }; });
+    const lost = {};
+    for (const w of pool) {
+      if (!w.cargo) continue;
+      const u = Math.min(w.units, Math.max(0, this.storageCap(st, w.cargo) - this.stored(st, w.cargo)));
+      if (u > 0) {
+        st.transfer ||= [];
+        const lot = st.transfer.find(l => l.c === w.cargo && l.origin === w.origin);
+        if (lot) { lot.day = (lot.day * lot.units + w.day * u) / (lot.units + u); lot.units += u; } else st.transfer.push({ c: w.cargo, units: u, origin: w.origin, day: w.day });
+        this.lineStop(tr, st).x += u;
+      }
+      if (w.units - u >= 0.5) lost[w.cargo] = (lost[w.cargo] || 0) + w.units - u;
+    }
+    tr.len = LOCO_LEN + tr.wagons.length * WAGON_LEN;
+    this.view?.consistChanged?.(tr);
+    const gone = Object.entries(lost).map(([k, u]) => `${Math.round(u)} ${CARGO[k].unit} of ${CARGO[k].name.toLowerCase()}`).join(', ');
+    if (gone) this.newsFor(this.ownerOf(tr), `🔧 ${tr.name} left ${gone} at ${st.name}'s yard with no room to store it — lost`);
+    return pool.length + added; // (wagons moved in the yard)
+  }
+  // a vehicle's line record: running cost this/last year, and per stop what it loaded, delivered, earned, stored
+  lineOf(v) { return v.ln ||= { cy: 0, cl: 0, sy: {}, sl: {} }; }
+  lineStop(v, st) { return this.lineOf(v).sy[st.id] ||= { u: {}, d: {}, e: 0, x: 0 }; }
   maxLoad(c) { return Math.max(...Object.values(CARGO[c].cap)); }
   storageCap(st, c) { return ECON.storage[st.warehouse || 0] * this.maxLoad(c); }
   stored(st, c) { return (st.waiting[c] || 0) + (st.transfer || []).reduce((s, l) => s + (l.c === c ? l.units : 0), 0); }
@@ -836,19 +886,19 @@ export class Game {
       stations: W.stations.map(s => ({ id: s.id, waiting: s.waiting, svc: s.svc || {}, offered: s.offered || {}, taken: s.taken || {}, transfer: (s.transfer || []).map(l => ({ c: l.c, units: l.units, origin: l.origin.id, day: l.day })) })),
       ships: this.ships.map(t => ({
         id: t.id, owner: t.owner, name: t.name, kind: t.kind, value: t.value, orders: t.orders.map(s => s.id), idx: t.idx, at: t.at ? t.at.id : null, to: t.to ? t.to.id : null,
-        state: t.state, dwell: t.dwell, speed: t.speed, s: t.s, dockDays: t.dockDays, ageDays: t.ageDays, revenueYear: t.revenueYear, revenueLast: t.revenueLast, lifetime: t.lifetime, trips: t.trips, handedOver: t.handedOver || 0,
+        state: t.state, dwell: t.dwell, speed: t.speed, s: t.s, dockDays: t.dockDays, ageDays: t.ageDays, revenueYear: t.revenueYear, revenueLast: t.revenueLast, lifetime: t.lifetime, trips: t.trips, handedOver: t.handedOver || 0, ...(t.ln ? { ln: t.ln } : {}),
         holds: t.wagons.map(w => ({ type: w.type, cargo: w.cargo, units: w.units, origin: w.origin ? w.origin.id : null, day: w.day })),
       })),
       ...(this.trucks.length ? { trucks: this.trucks.map(t => ({
         id: t.id, owner: t.owner, name: t.name, kind: t.kind, value: t.value, orders: t.orders.map(s => s.id), idx: t.idx, at: t.at ? t.at.id : null, to: t.to ? t.to.id : null,
-        state: t.state, dwell: t.dwell, speed: t.speed, s: t.s, ageDays: t.ageDays, revenueYear: t.revenueYear, revenueLast: t.revenueLast, lifetime: t.lifetime, trips: t.trips, handedOver: t.handedOver || 0,
+        state: t.state, dwell: t.dwell, speed: t.speed, s: t.s, ageDays: t.ageDays, revenueYear: t.revenueYear, revenueLast: t.revenueLast, lifetime: t.lifetime, trips: t.trips, handedOver: t.handedOver || 0, ...(t.ln ? { ln: t.ln } : {}),
         legs: t.path ? t.path.legs.map(l => [l.edge.id, l.forward]) : null,
         holds: t.wagons.map(w => ({ type: w.type, cargo: w.cargo, units: w.units, origin: w.origin ? w.origin.id : null, day: w.day })),
       })) } : {}),
       ...(this.truckSeq > 1 ? { truckSeq: this.truckSeq } : {}),
       planes: this.planes.map(t => ({
         id: t.id, owner: t.owner, name: t.name, kind: t.kind, value: t.value, orders: t.orders.map(s => s.id), idx: t.idx, at: t.at ? t.at.id : null, to: t.to ? t.to.id : null,
-        state: t.state, dwell: t.dwell, speed: t.speed, s: t.s, park: t.park, pathPark: t.pathPark || null, ageDays: t.ageDays, revenueYear: t.revenueYear, revenueLast: t.revenueLast, lifetime: t.lifetime, trips: t.trips, handedOver: t.handedOver || 0,
+        state: t.state, dwell: t.dwell, speed: t.speed, s: t.s, park: t.park, pathPark: t.pathPark || null, ageDays: t.ageDays, revenueYear: t.revenueYear, revenueLast: t.revenueLast, lifetime: t.lifetime, trips: t.trips, handedOver: t.handedOver || 0, ...(t.ln ? { ln: t.ln } : {}),
         holds: t.wagons.map(w => ({ type: w.type, cargo: w.cargo, units: w.units, origin: w.origin ? w.origin.id : null, day: w.day })),
       })),
       trains: this.trains.map(t => ({
@@ -860,6 +910,7 @@ export class Game {
         legs: t.legs ? t.legs.map(l => [l.edge.id, l.forward]) : null,
         plats: t.units ? t.units.map(u => u.kind === 'station' ? (u.plat ?? null) : null) : null,
         ...(t.newConsist ? { newConsist: t.newConsist } : {}),
+        ...(t.plan ? { plan: t.plan } : {}), ...(t.base ? { base: t.base } : {}), ...(t.ln ? { ln: t.ln } : {}),
         ...(t.xlocks?.length ? { xl: t.xlocks.map(D => D.id) } : {}),
         handedOver: t.handedOver || 0, ageDays: t.ageDays, revenueYear: t.revenueYear, revenueLast: t.revenueLast, lifetime: t.lifetime, trips: t.trips,
       })),
@@ -952,7 +1003,7 @@ export class Game {
   restorePlane(d, st) {
     const orders = d.orders.map(st);
     const pl = this.makePlane(d.kind, orders, d.value);
-    Object.assign(pl, { id: d.id, name: d.name, idx: d.idx, ageDays: d.ageDays, revenueYear: d.revenueYear, revenueLast: d.revenueLast, lifetime: d.lifetime, trips: d.trips, handedOver: d.handedOver || 0 });
+    Object.assign(pl, { id: d.id, name: d.name, idx: d.idx, ageDays: d.ageDays, revenueYear: d.revenueYear, revenueLast: d.revenueLast, lifetime: d.lifetime, trips: d.trips, handedOver: d.handedOver || 0, ...(d.ln ? { ln: structuredClone(d.ln) } : {}) });
     d.holds.forEach((w, k) => Object.assign(pl.wagons[k], { cargo: w.cargo, units: w.units, origin: w.origin ? st(w.origin) : null, day: w.day }));
     pl.at = st(d.at) || orders[0];
     if (d.state === 'moving' && st(d.to)) {
@@ -966,7 +1017,7 @@ export class Game {
   restoreShip(d, st) {
     const orders = d.orders.map(st);
     const sh = this.makeShip(d.kind, orders, d.value);
-    Object.assign(sh, { id: d.id, name: d.name, idx: d.idx, dockDays: d.dockDays || 0, ageDays: d.ageDays, revenueYear: d.revenueYear, revenueLast: d.revenueLast, lifetime: d.lifetime, trips: d.trips, handedOver: d.handedOver || 0 });
+    Object.assign(sh, { id: d.id, name: d.name, idx: d.idx, dockDays: d.dockDays || 0, ageDays: d.ageDays, revenueYear: d.revenueYear, revenueLast: d.revenueLast, lifetime: d.lifetime, trips: d.trips, handedOver: d.handedOver || 0, ...(d.ln ? { ln: structuredClone(d.ln) } : {}) });
     d.holds.forEach((w, k) => Object.assign(sh.wagons[k], { cargo: w.cargo, units: w.units, origin: w.origin ? st(w.origin) : null, day: w.day }));
     sh.at = st(d.at) || orders[0];
     if (d.state === 'moving' && st(d.to)) {
@@ -981,7 +1032,9 @@ export class Game {
     const orders = d.orders.map(st);
     const tr = this.makeTrain(loco, d.wagons.map(w => w.type), orders, d.value);
     if (d.newConsist) tr.newConsist = d.newConsist;
-    Object.assign(tr, { id: d.id, name: d.name, idx: d.idx, handedOver: d.handedOver || 0, ageDays: d.ageDays, revenueYear: d.revenueYear, revenueLast: d.revenueLast, lifetime: d.lifetime, trips: d.trips });
+    if (d.base) tr.base = [...d.base];
+    if (d.plan && d.plan.length === orders.length) tr.plan = d.plan.map(p => p ? [...p] : null);
+    Object.assign(tr, { id: d.id, name: d.name, idx: d.idx, handedOver: d.handedOver || 0, ...(d.ln ? { ln: structuredClone(d.ln) } : {}), ageDays: d.ageDays, revenueYear: d.revenueYear, revenueLast: d.revenueLast, lifetime: d.lifetime, trips: d.trips });
     d.wagons.forEach((w, k) => {
       Object.assign(tr.wagons[k], { cargo: w.cargo, units: w.units, origin: w.origin ? st(w.origin) : null, day: w.day });
     });
@@ -1258,7 +1311,7 @@ export class Game {
   restoreTruck(d, st) {
     const orders = d.orders.map(st);
     const rv = this.makeTruck(d.kind, orders, d.value);
-    Object.assign(rv, { id: d.id, name: d.name, idx: d.idx, ageDays: d.ageDays, revenueYear: d.revenueYear, revenueLast: d.revenueLast, lifetime: d.lifetime, trips: d.trips, handedOver: d.handedOver || 0 });
+    Object.assign(rv, { id: d.id, name: d.name, idx: d.idx, ageDays: d.ageDays, revenueYear: d.revenueYear, revenueLast: d.revenueLast, lifetime: d.lifetime, trips: d.trips, handedOver: d.handedOver || 0, ...(d.ln ? { ln: structuredClone(d.ln) } : {}) });
     d.holds.forEach((w, k) => Object.assign(rv.wagons[k], { cargo: w.cargo, units: w.units, origin: w.origin ? st(w.origin) : null, day: w.day }));
     rv.at = st(d.at) || orders[0];
     if (d.state === 'moving' && st(d.to)) {
@@ -1388,6 +1441,7 @@ export class Game {
       if (this.consumers(st, w.cargo).length) {
         const pay = this.deliver(w.cargo, w.units, w.origin, st, w.day);
         earned += pay; tr.revenueYear += pay; tr.lifetime += pay;
+        const ls = this.lineStop(tr, st); ls.d[w.cargo] = (ls.d[w.cargo] || 0) + w.units; ls.e += pay;
       } else if (this.isHub(st) && !acceptedElsewhere(w.cargo)) {
         const room = Math.max(0, this.storageCap(st, w.cargo) - this.stored(st, w.cargo));
         const u = Math.min(w.units, room);
@@ -1396,12 +1450,21 @@ export class Game {
           const lot = st.transfer.find(l => l.c === w.cargo && l.origin === w.origin);
           if (lot) { lot.day = (lot.day * lot.units + w.day * u) / (lot.units + u); lot.units += u; }
           else st.transfer.push({ c: w.cargo, units: u, origin: w.origin, day: w.day });
-          transferred += u; tr.handedOver = (tr.handedOver || 0) + u;
+          transferred += u; tr.handedOver = (tr.handedOver || 0) + u; this.lineStop(tr, st).x += u;
         }
       } else continue;
       w.cargo = null; w.units = 0; w.origin = null; moved++;
     }
-    if (tr.type === 'train' && tr.newConsist) this.applyConsist(tr);
+    let swapped = 0;
+    if (tr.type === 'train') {
+      // (a purchase or sale works on the owned set: a train running a swapped set first takes its own wagons back
+      // in the yard, which stores the cargo of the ones that go)
+      if (tr.newConsist) { if (tr.base) swapped += this.yardSwap(tr, st, tr.base); this.applyConsist(tr); }
+      // this stop's set; with the plan cleared, the train goes back to the wagons it owns
+      const want = tr.plan ? tr.plan[tr.idx] : tr.base;
+      if (want) swapped += this.yardSwap(tr, st, want);
+      if (!tr.plan && tr.base && tr.base.length === tr.wagons.length && tr.base.every((t, k) => t === tr.wagons[k].type)) tr.base = null;
+    }
     // load: fresh cargo goes to any stop that takes it (or to a warehouse further on);
     // transfer cargo only continues to a real consumer
     // fresh cargo may go to a hub on this route only if another train carries it on from there
@@ -1431,10 +1494,12 @@ export class Game {
       l.take(n);
       Object.assign(w, { cargo: l.c, units: n, origin: l.origin, day: l.day });
       moved++;
+      const ls = this.lineStop(tr, st); ls.u[l.c] = (ls.u[l.c] || 0) + n;
     }
     if (st.transfer) st.transfer = st.transfer.filter(l => l.units >= 0.5);
     this.view?.cargoChanged(tr);
     tr.state = 'loading'; tr.dwell = tr.type === 'plane' ? 1 + moved * 0.2 : tr.type === 'truck' ? 0.5 + moved * 0.1 : (tr.type === 'ship' ? 2 : 1.2) + moved * (tr.type === 'ship' ? 0.15 : 0.25);
+    if (swapped) tr.dwell += swapped * 0.15; // (shunting in the yard)
     if (tr.type === 'train' && this.auctions.has('telegraph')) tr.dwell *= 0.85;
     if (earned > 0) { this.emit('float', this.vehiclePos(tr), '+' + money(earned)); tr.trips++; }
     if (transferred > 0) this.emit('float', this.vehiclePos(tr), `📦 ${Math.round(transferred)} stored`);
@@ -1659,7 +1724,7 @@ export class Game {
     if (newYear) {
       for (const c of this.active) this.as(c, () => { this.history.push(this.ledger); this.ledger = this.newLedger(y); });
       this.lastYear = y;
-      for (const t of this.vehicles()) { t.revenueLast = t.revenueYear; t.revenueYear = 0; }
+      for (const t of this.vehicles()) { t.revenueLast = t.revenueYear; t.revenueYear = 0; const l = this.lineOf(t); l.cl = l.cy; l.cy = 0; l.sl = l.sy; l.sy = {}; }
       for (const i of W.industries) if (i.owner) { i.incomeLast = i.incomeYear; i.incomeYear = 0; }
       this.emit('news', `📅 Happy new year ${y}! Company value ${money(this.companyValue())}`);
       for (const c of this.active) this.as(c, () => this.fin.yearly());
@@ -1700,6 +1765,12 @@ export class Game {
     const trains = this.trains.filter(own), ships = this.ships.filter(own), planes = this.planes.filter(own), stations = W.stations.filter(own);
     const tech = (this.auctions.has('compound', c) ? 0.85 : 1) * (this.auctions.has('diesel', c) ? 0.8 : 1);
     const upkeep = trains.reduce((s, t) => s + t.loco.upkeep * (1 + Math.min(0.5, t.ageDays / 365 / 40)), 0) * tech * I / 12;
+    // (each vehicle's share, for the line manager: the same formulas, kept apart from the company totals)
+    const share = (list, f) => { for (const t of list) this.lineOf(t).cy += f(t); };
+    share(trains, t => t.loco.upkeep * (1 + Math.min(0.5, t.ageDays / 365 / 40)) * tech * I / 12);
+    share(ships, t => t.def.upkeep * (1 + Math.min(0.5, t.ageDays / 365 / 40)) * I / 12);
+    share(planes, t => t.def.upkeep * (1 + Math.min(0.5, t.ageDays / 365 / 30)) * I / 12);
+    share(this.trucks.filter(own), t => t.def.upkeep * (1 + Math.min(0.5, t.ageDays / 365 / 20)) * I / 12);
     const track = this.net.edges.filter(own).reduce((s, e) => s + e.length * (e.double ? 1.75 : 1), 0) * ECON.trackUpkeepPerUnit * I / 12;
     const interest = this.fin.annualInterest() / 12; // bonds (finance.js)
     const shipUp = ships.reduce((s, t) => s + t.def.upkeep * (1 + Math.min(0.5, t.ageDays / 365 / 40)), 0) * I / 12;

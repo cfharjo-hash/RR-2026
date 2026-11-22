@@ -115,6 +115,9 @@ table.mini { width: 100%; border-collapse: collapse; } table.mini td { padding: 
 svg.spark polyline { fill: none; stroke: var(--gold); stroke-width: 1.5; } svg.spark line { stroke: #555; stroke-dasharray: 2 2; }
 .buy-grid { display: grid; grid-template-columns: 1fr 1.3fr; gap: 18px; } .buy-grid h4 { margin: 0 0 6px; color: var(--gold); }
 table.wagons td { border-bottom: 1px solid var(--line); padding: 5px 4px; } .step { white-space: nowrap; text-align: right; } .step b { display: inline-block; width: 22px; text-align: center; } .step button { padding: 2px 9px; }
+.ln-head { margin: 14px 0 4px; } .tbl tr.sel { background: rgba(255,211,90,.08); }
+.tbl tr.ln-stops > td { background: rgba(0,0,0,.18); padding: 6px 10px 10px; text-align: left; }
+.tbl.ln td, .tbl.ln th { font-size: 12px; vertical-align: top; text-align: left; } .tbl.ln td.chips .chip { margin: 0 3px 3px 0; }
 .tbl.market td, .tbl.market th { font-size: 12px; } .tbl tr.locked { opacity: .45; }
 svg.chain .node.future rect { stroke-dasharray: 4 3; fill: #24272b; } svg.chain .yr { fill: var(--gold); font-size: 10px; } svg.chain .val { fill: #8fd3a0; }
 #cell-share { cursor: pointer; } #share small { font-size: 11px; margin-left: 4px; }
@@ -166,7 +169,7 @@ svg.chain .node.hl rect { stroke: var(--gold); }
   <button data-tool="bulldoze">Bulldoze <kbd>X</kbd></button>
   <button id="btn-heights">Heights <kbd>E</kbd></button>
   <hr>
-  <button id="btn-trains">Trains <kbd>V</kbd></button>
+  <button id="btn-trains">Lines <kbd>V</kbd></button>
   <button id="btn-chain">Production <kbd>P</kbd></button>
   <button id="btn-markets">Markets <kbd>M</kbd></button>
   <button id="btn-ledger">Ledger <kbd>L</kbd></button>

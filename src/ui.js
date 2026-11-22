@@ -599,9 +599,9 @@ export class UI {
       h += `<h2>🚂 ${o.name}</h2>${ownerLine}<p class="muted">${o.loco.name} · ${o.wagons.length} wagons · ${Math.round(g.trainTons(o))} t · built ${Math.floor(o.ageDays / 365)}y ago</p><p>${st}</p>`;
       h += `<h4>Consist</h4><table class="mini">${o.wagons.map(w => `<tr><td>${WAGONS[w.type].name}</td><td>${w.cargo ? chip(w.cargo) : '<span class="muted">empty</span>'}</td><td class="sub">${w.cargo ? fmtU(w.cargo, w.units) : ''}</td></tr>`).join('')}</table>`;
       if (o.newConsist) h += `<p class="warn">🔧 At the next stop: ${this.consistText(o.newConsist)} <button id="b-cmixx" class="small">Cancel</button></p>`;
-      h += `<h4>Route</h4><ol class="route">${o.orders.map((s, i) => `<li class="${i === o.idx ? 'cur' : ''}">${s.name}${s.warehouse ? ' 📦' : ''}</li>`).join('')}</ol>`;
-      h += `<p>Revenue this year <b>${money(o.revenueYear)}</b> · last year ${money(o.revenueLast)}<br>Lifetime ${money(o.lifetime)} · upkeep ${money(o.loco.upkeep)}/yr${o.handedOver ? `<br><span class="sub">📦 ${Math.round(o.handedOver).toLocaleString()} units handed to warehouses (paid to the train that delivers them)</span>` : ''}</p>`;
-      h += `<div class="btns"><button id="b-follow">📷 Follow</button>${foreign ? '' : '<button id="b-cmix">🔧 Change wagons</button><button id="b-sell" class="danger">Sell</button>'}</div>`;
+      h += `<h4>Route</h4><ol class="route">${o.orders.map((s, i) => `<li class="${i === o.idx ? 'cur' : ''}">${s.name}${s.warehouse ? ' 📦' : ''}${o.plan?.[i] ? ` <span class="sub">🔀 leaves with ${this.consistText(o.plan[i].slice(0, this.game.baseOf(o).length))}</span>` : ''}</li>`).join('')}</ol>`;
+      h += `<p>Revenue this year <b>${money(o.revenueYear)}</b> · last year ${money(o.revenueLast)} · profit <b class="${o.revenueYear - (o.ln?.cy || 0) >= 0 ? 'ok' : 'bad'}">${money(o.revenueYear - (o.ln?.cy || 0))}</b><br>Lifetime ${money(o.lifetime)} · upkeep ${money(o.loco.upkeep)}/yr${o.handedOver ? `<br><span class="sub">📦 ${Math.round(o.handedOver).toLocaleString()} units handed to warehouses (paid to the train that delivers them)</span>` : ''}</p>`;
+      h += `<div class="btns"><button id="b-follow">📷 Follow</button>${foreign ? '' : '<button id="b-lines">📋 Line manager</button><button id="b-cmix">🔧 Change wagons</button><button id="b-sell" class="danger">Sell</button>'}</div>`;
     } else if (o.type === 'plane') {
       const p = o.path, phase = o.state !== 'moving' ? '' : o.s < p.sTaxi ? 'taxiing' : o.s < p.sAir ? 'taking off' : o.s < p.sLand ? (p.sLand - o.s < 450 ? 'on approach' : 'cruising') : 'landing';
       const st = o.state === 'moving' ? `${phase[0].toUpperCase() + phase.slice(1)} → <b>${o.to.name}</b> · ${Math.round(o.speed / 0.5)} mph` : o.state === 'stuck' ? '<span class="bad">No airfield!</span>' : `At <b>${o.orders[o.idx].name}</b> · boarding`;
@@ -616,7 +616,7 @@ export class UI {
       const agg = {}; for (const w of o.wagons) if (w.cargo) agg[w.cargo] = (agg[w.cargo] || 0) + w.units;
       h += `<h2>🛻 ${o.name}</h2>${ownerLine}<p class="muted">${o.def.name} · ${o.def.speed} mph · built ${Math.floor(o.ageDays / 365)}y ago</p><p>${st}</p>`;
       h += `<h4>Load</h4><div class="chips">${Object.entries(agg).map(([c, u]) => chip(c, ' ' + fmtU(c, u))).join('') || '<span class="muted">empty</span>'}</div>`;
-      h += `<h4>Route</h4><ol class="route">${o.orders.map((s, i) => `<li class="${i === o.idx ? 'cur' : ''}">${s.name}${s.warehouse ? ' 📦' : ''}</li>`).join('')}</ol>`;
+      h += `<h4>Route</h4><ol class="route">${o.orders.map((s, i) => `<li class="${i === o.idx ? 'cur' : ''}">${s.name}${s.warehouse ? ' 📦' : ''}${o.plan?.[i] ? ` <span class="sub">🔀 leaves with ${this.consistText(o.plan[i].slice(0, this.game.baseOf(o).length))}</span>` : ''}</li>`).join('')}</ol>`;
       h += `<p>Revenue this year <b>${money(o.revenueYear)}</b> · last year ${money(o.revenueLast)}<br>Lifetime ${money(o.lifetime)} · upkeep ${money(o.def.upkeep)}/yr${o.handedOver ? `<br><span class="sub">📦 ${Math.round(o.handedOver).toLocaleString()} units handed to warehouses (paid to the train that delivers them)</span>` : ''}</p>`;
       h += `<div class="btns"><button id="b-follow">📷 Follow</button>${foreign ? '' : '<button id="b-selltruck" class="danger">Sell</button>'}</div>`;
     } else if (o.type === 'road') {
@@ -653,7 +653,8 @@ export class UI {
     const on = (id, fn) => { const b = p.querySelector('#' + id); if (b) b.onclick = fn; };
     on('b-follow', () => { this.api.follow = o; });
     on('b-cmix', () => this.openConsist(o));
-    on('b-cmixx', () => { this.game.setConsist(o, o.wagons.map(w => w.type)); this.inspect(o, true); });
+    on('b-cmixx', () => { this.game.setConsist(o, this.game.baseOf(o)); this.inspect(o, true); });
+    on('b-lines', () => { this.lineSel = o.id; this.openTrains(); });
     on('b-sell', () => { this.game.sellTrain(o); this.inspect(null); });
     act('b-wh', () => g.buildWarehouse(o));
     act('b-double', () => g.doubleTrack(o));
@@ -703,7 +704,7 @@ export class UI {
         ${this.game.frontier.active ? '<li><b>The frontier</b> (click the line under the date): the west starts as territories. Serve their towns and they grow; new industries and towns follow. Track built there earns a land grant per mile until the territory becomes a state. In <b>wartime</b> the army buys several times as much.</li>' : ''}
         <li>Open the <b>Production chain</b> (P) to plan deeper chains. Tools &amp; Machinery delivered back to farms and mines boost their output.</li>
       </ul></details>
-      <p class="muted">Camera: left-drag pan · right-drag rotate · wheel zoom · W A S D or arrows pan${this.world.terrain.cont ? ' · Home: the whole map · /: find a town · the overview map (bottom right): click or drag' : ''}. Speed: 1-4, Space pause. Ledger (L), Trains (V), News (Y), Bulldoze (X).</p>
+      <p class="muted">Camera: left-drag pan · right-drag rotate · wheel zoom · W A S D or arrows pan${this.world.terrain.cont ? ' · Home: the whole map · /: find a town · the overview map (bottom right): click or drag' : ''}. Speed: 1-4, Space pause. Ledger (L), Line manager (V), News (Y), Bulldoze (X).</p>
       <label class="muted"><input type="checkbox" id="w-tips" ${this.tipsOn() ? 'checked' : ''}> Show tips while I play</label>
       ${this.game.actions.some(a => !a.o) || this.game.day > 60 ? `<p class="muted">Map ${this.api.map ? '#' + this.api.map : '0 (the original map)'}</p>` : `
       <div class="map-row">Map <input id="w-map" type="number" min="0" max="99999" value="${this.api.map}"> <button id="w-map-go">Play this map</button> <button id="w-map-rnd">Random map</button>
@@ -761,15 +762,17 @@ export class UI {
   }
   consistText(types) { return Object.entries(types.reduce((o, t) => (o[t] = (o[t] || 0) + 1, o), {})).map(([t, n]) => `${n}× ${WAGONS[t].name.toLowerCase()}`).join(', '); }
   // change a train's wagon mix: +/− per type, a suggestion from what its route offers; done at the next stop
-  openConsist(tr) {
-    const g = this.game, W = this.world, avail = g.wagonsAvailable().filter(k => !WAGONS[k].air && !WAGONS[k].road), max = Math.min(tr.loco.maxCars, 6);
+  // (with `stop`: the set the train leaves that stop with, swapped for free in the yard; from the line manager)
+  openConsist(tr, stop = null) {
+    const g = this.game, W = this.world, avail = g.wagonsAvailable().filter(k => !WAGONS[k].air && !WAGONS[k].road);
+    const yard = stop !== null, ST = yard ? tr.orders[stop] : null, max = yard ? g.baseOf(tr).length : Math.min(tr.loco.maxCars, 6);
     const carries = (t) => Object.keys(CARGO).filter(c => CARGO[c].cap[t] && (!CARGO[c].year || CARGO[c].year <= g.year));
     const counts = Object.fromEntries(avail.map(k => [k, 0]));
-    for (const t of tr.newConsist || tr.wagons.map(w => w.type)) if (counts[t] !== undefined) counts[t]++;
+    for (const t of (yard ? tr.plan?.[stop] : tr.newConsist) || g.baseOf(tr)) if (counts[t] !== undefined) counts[t]++;
     // what the route offers: cargo a stop supplies (or holds for transfer) that another stop takes, weighted by what waits
     const suggest = () => {
       const want = {};
-      for (const st of tr.orders) for (const c of new Set([...W.supplies(st), ...(st.transfer || []).map(l => l.c)])) {
+      for (const st of yard ? [ST] : tr.orders) for (const c of new Set([...W.supplies(st), ...(st.transfer || []).map(l => l.c)])) {
         if (CARGO[c].year && CARGO[c].year > g.year) continue;
         if (!tr.orders.some(o => o !== st && g.consumers(o, c).length)) continue;
         const t = Object.keys(CARGO[c].cap).find(w => avail.includes(w)); if (!t) continue;
@@ -785,6 +788,26 @@ export class UI {
       return true;
     };
     const consist = () => Object.entries(counts).flatMap(([k, n]) => Array(n).fill(k));
+    if (yard) {
+      const back = () => { this.lineSel = tr.id; this.openTrains(); };
+      const m = this.modal(`${tr.name} leaving ${ST.name}`, `
+        <p class="muted">The wagons ${tr.name} leaves <b>${ST.name}</b> with. The yard swaps them for free after unloading (each wagon moved adds a little stop time). It can use up to ${max} wagons — what it owns; buy more with 🔧 Change wagons. Cargo in a wagon left in the yard is stored at the station while there is room.</p>
+        <table class="mini wagons">${avail.map(k => `<tr><td><b>${WAGONS[k].name}</b><br><span class="sub">${carries(k).map(c => CARGO[c].name).join(', ') || '—'}</span></td><td class="step"><button data-dec="${k}">−</button><b id="cw-${k}">0</b><button data-inc="${k}">+</button></td></tr>`).join('')}</table>
+        <p id="cw-sum"></p>
+        <div class="btns"><button id="cw-sug">✨ Suggest for ${ST.name}</button><button id="cw-keep">Keep as it arrives</button><button id="cw-back">Back</button><button id="cw-ok" class="primary">Set for this stop</button></div>`);
+      const upd = () => {
+        for (const k of Object.keys(counts)) { const e = m.querySelector('#cw-' + k); if (e) e.textContent = counts[k]; }
+        m.querySelector('#cw-sum').innerHTML = `${consist().length}/${max} wagons · ${this.consistText(consist()) || '<span class="bad">no wagons</span>'}`;
+      };
+      m.querySelectorAll('[data-inc]').forEach(b => b.onclick = () => { if (consist().length < max) counts[b.dataset.inc]++; upd(); });
+      m.querySelectorAll('[data-dec]').forEach(b => b.onclick = () => { if (counts[b.dataset.dec] > 0) counts[b.dataset.dec]--; upd(); });
+      m.querySelector('#cw-sug').onclick = () => { if (!suggest()) this.toast(`Nothing at ${ST.name} for the other stops yet`, true); upd(); };
+      m.querySelector('#cw-back').onclick = back;
+      m.querySelector('#cw-keep').onclick = () => { g.setStopConsist(tr, stop, null); back(); };
+      m.querySelector('#cw-ok').onclick = () => { const err = g.setStopConsist(tr, stop, consist()); if (err) { this.toast(err, true); return; } back(); };
+      upd();
+      return;
+    }
     const m = this.modal(`Wagons of ${tr.name}`, `
       <p class="muted">${tr.loco.name} pulls up to ${max} wagons. The change is made at the train's next stop, after it unloads: wagons that go are sold for half their price, new ones arrive empty.</p>
       <table class="mini wagons">${avail.map(k => `<tr><td><b>${WAGONS[k].name}</b><br><span class="sub">${carries(k).map(c => CARGO[c].name).join(', ') || '—'}</span></td><td class="sub">${money(g.wagonCost(k))}</td><td class="step"><button data-dec="${k}">−</button><b id="cw-${k}">0</b><button data-inc="${k}">+</button></td></tr>`).join('')}</table>
@@ -871,18 +894,52 @@ export class UI {
     };
   }
 
+  // the line manager: vehicles grouped by route (a line), each with its profit (revenue less running cost); a vehicle
+  // opens to its stops: what waits there, what it loaded and delivered there this year, what it earned, and for a
+  // train the wagons it leaves that stop with (the yard)
   openTrains(refresh = false) {
-    const g = this.game;
-    const fleet = g.vehiclesOf(g.player);
-    const html = fleet.length ? `<table class="tbl"><tr><th>Vehicle</th><th>Route</th><th>Status</th><th>Rev. this year</th><th>Last year</th></tr>
-      ${fleet.map(t => `<tr data-tr="${t.id}"><td>${t.type === 'ship' ? '🚢' : t.type === 'plane' ? '✈' : t.type === 'truck' ? '🛻' : '🚂'} <b>${t.name}</b></td><td>${t.orders.map(s => s.name).join(' → ')}</td><td>${t.state === 'moving' ? (t.waiting ? '⛔ waiting → ' : '→ ') + t.to.name : t.state}</td><td>${money(t.revenueYear)}</td><td>${money(t.revenueLast)}</td></tr>`).join('')}</table>`
-      : '<p class="muted">No trains or ships yet. Press B to buy a train, H for a ship.</p>';
-    if (refresh) { const b = document.querySelector('.modal .mbody'); if (b) b.innerHTML = html; else return; }
-    else this.modal('Trains &amp; ships', html, true);
-    this.trainsOpen = true;
-    document.querySelectorAll('[data-tr]').forEach(r => r.onclick = () => {
-      const t = g.vehicles().find(x => x.id === r.dataset.tr); this.closeModals(); this.inspect(t); this.api.follow = t;
-    });
+    const g = this.game, fleet = g.vehiclesOf(g.player);
+    if (this.lineSel && !fleet.some(t => t.id === this.lineSel)) this.lineSel = null;
+    const icon = (t) => t.type === 'ship' ? '🚢' : t.type === 'plane' ? '✈' : t.type === 'truck' ? '🛻' : '🚂';
+    const cost = (t, last) => Math.round(last ? t.ln?.cl || 0 : t.ln?.cy || 0);
+    const profit = (t, last) => (last ? t.revenueLast : t.revenueYear) - cost(t, last);
+    const pm = (v) => `<span class="${v >= 0 ? 'ok' : 'bad'}">${v < 0 ? '−' : ''}${money(Math.abs(v))}</span>`;
+    const chips = (o) => Object.entries(o || {}).filter(([, n]) => n >= 0.5).sort((a, b) => b[1] - a[1]).map(([c, n]) => chip(c, ' ' + fmtU(c, n))).join('') || '<span class="muted">—</span>';
+    // a line: the same stops in the same order, from whichever stop each vehicle happens to start
+    const lineKey = (t) => { const ids = t.orders.map(s => s.id); const k = ids.indexOf([...ids].sort()[0]); return t.type + ':' + [...ids.slice(k), ...ids.slice(0, k)].join('>'); };
+    const lines = new Map();
+    for (const t of fleet) { const k = lineKey(t); if (!lines.has(k)) lines.set(k, []); lines.get(k).push(t); }
+    const stopsOf = (t) => {
+      const yr = t.ln?.sy || {}, mine = t.type === 'train';
+      return `<tr class="ln-stops"><td colspan="7"><table class="tbl mini ln">
+        <tr><th>Stop</th><th>Waiting there now</th><th>Loaded this year</th><th>Delivered this year</th><th>Earned</th>${mine ? '<th>Wagons leaving</th>' : ''}</tr>
+        ${t.orders.map((st, i) => {
+          const s = yr[st.id] || {}, wait = {};
+          for (const [c, n] of Object.entries(st.waiting || {})) wait[c] = n;
+          for (const l of st.transfer || []) wait[l.c] = (wait[l.c] || 0) + l.units;
+          const plan = t.plan?.[i];
+          return `<tr><td>${i === t.idx ? '▶ ' : ''}<b>${st.name}</b>${st.warehouse ? ' 📦' : ''}</td><td class="chips">${chips(wait)}</td><td class="chips">${chips(s.u)}</td><td class="chips">${chips(s.d)}</td><td>${s.e ? money(s.e) : '—'}${s.x >= 0.5 ? `<br><span class="sub">📦 ${Math.round(s.x)} stored</span>` : ''}</td>${mine ? `<td>${plan ? this.consistText(plan.slice(0, g.baseOf(t).length)) : '<span class="muted">as it arrives</span>'} <button class="small" data-stop="${i}" data-v="${t.id}">✎</button></td>` : ''}</tr>`;
+        }).join('')}</table>
+        <p class="sub">${mine ? `Owns ${this.consistText(g.baseOf(t))} · ${t.loco.name}${t.newConsist ? ` · <span class="warn">🔧 changes to ${this.consistText(t.newConsist)} at the next stop</span>` : ''} · ` : ''}running cost this year ${money(cost(t))}, last year ${money(cost(t, true))}</p>
+        <div class="btns">${mine ? `<button data-cmix="${t.id}">🔧 Change wagons (buy/sell)</button>` : ''}<button data-ins="${t.id}">📷 Show on map</button></div></td></tr>`;
+    };
+    const sum = (list, f) => list.reduce((s, t) => s + f(t), 0);
+    const html = !fleet.length ? '<p class="muted">No trains or ships yet. Press B to buy a train, H for a ship.</p>'
+      : `<p class="muted">Profit is revenue less running cost (upkeep). Click a vehicle to see its stops and set the wagons a train leaves each stop with. This year: revenue ${money(sum(fleet, t => t.revenueYear))}, profit ${pm(sum(fleet, t => profit(t)))}.</p>
+      ${[...lines.values()].map(list => `<h4 class="ln-head">${icon(list[0])} ${list[0].orders.map(s => s.name).join(' → ')} ↺ <span class="sub">· ${list.length} vehicle${list.length > 1 ? 's' : ''} · profit this year ${pm(sum(list, t => profit(t)))} · last year ${pm(sum(list, t => profit(t, true)))}</span></h4>
+        <table class="tbl"><tr><th>Vehicle</th><th>Status</th><th>Revenue</th><th>Cost</th><th>Profit</th><th>Last year</th><th>Lifetime rev.</th></tr>
+        ${list.map(t => `<tr data-tr="${t.id}" class="${t.id === this.lineSel ? 'sel' : ''}"><td>${t.id === this.lineSel ? '▾' : '▸'} ${icon(t)} <b>${t.name}</b>${t.plan ? ' <span class="sub" title="Changes wagons in the yard">🔀</span>' : ''}</td><td>${t.state === 'moving' ? (t.waiting ? '⛔ waiting → ' : '→ ') + t.to.name : t.state === 'stuck' ? '<span class="bad">stuck</span>' : 'at ' + t.orders[t.idx].name}</td><td>${money(t.revenueYear)}</td><td>${money(cost(t))}</td><td>${pm(profit(t))}</td><td>${pm(profit(t, true))}</td><td>${money(t.lifetime)}</td></tr>${t.id === this.lineSel ? stopsOf(t) : ''}`).join('')}</table>`).join('')}`;
+    if (refresh) {
+      const b = document.querySelector('.modal .mbody'); if (!b) return;
+      if (html === this.lineHtml) return;
+      const top = b.scrollTop; b.innerHTML = html; b.scrollTop = top;
+    } else this.modal('Line manager', html, true);
+    this.lineHtml = html; this.trainsOpen = true;
+    const find = (id) => g.vehicles().find(x => x.id === id);
+    document.querySelectorAll('.modal [data-tr]').forEach(r => r.onclick = () => { this.lineSel = this.lineSel === r.dataset.tr ? null : r.dataset.tr; this.lineHtml = null; this.openTrains(true); });
+    document.querySelectorAll('.modal [data-stop]').forEach(b => b.onclick = (e) => { e.stopPropagation(); this.openConsist(find(b.dataset.v), +b.dataset.stop); });
+    document.querySelectorAll('.modal [data-cmix]').forEach(b => b.onclick = (e) => { e.stopPropagation(); this.openConsist(find(b.dataset.cmix)); });
+    document.querySelectorAll('.modal [data-ins]').forEach(b => b.onclick = (e) => { e.stopPropagation(); const t = find(b.dataset.ins); this.closeModals(); this.inspect(t); this.api.follow = t; });
   }
 
   openSaves() {
