@@ -3,13 +3,13 @@ import { MapControls } from 'three/addons/controls/MapControls.js';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { TerrainView } from './view/terrainView.js';
 import { WorldView } from './view/worldView.js';
-import { JUNCTION_COST, SIGNAL_COST, MAX_GRADE } from './track.js';
+import { JUNCTION_COST, SIGNAL_COST, MAX_GRADE, SIGHT, BRAKE, stopDistance } from './track.js';
 import { createGame, generateMap, newGame } from './setup.js';
 import { TrackView } from './view/trackView.js';
 import { VehicleView } from './view/vehicleView.js';
 import { RoadView } from './view/roadView.js';
 import { stationModel } from './view/models.js';
-import { ECON, FEATURES } from './data.js';
+import { ECON, FEATURES, RULES } from './data.js';
 // ?dlc=1: switch on the transport modes held back for an expansion (ships, aircraft, roads)
 if (new URLSearchParams(location.search).get('dlc') === '1') Object.assign(FEATURES, { ships: true, planes: true, roads: true });
 import { UI } from './ui.js';
@@ -86,7 +86,7 @@ async function init() {
   worldView.build();
   await step('Opening the company books…');
   ui = new UI(game, world, net, api);
-  window.__ih = { game, world, net, api, terrain, ui, camera, controls, renderer, scene }; // debug handle
+  window.__ih = { game, world, net, api, terrain, ui, camera, controls, renderer, scene, trackView, vehicleView }; // debug handle
   const t0 = world.towns[0];
   controls.target.set(t0.x, t0.y, t0.z);
   camera.position.set(t0.x + 420, t0.y + 520, t0.z + 520);
@@ -313,6 +313,17 @@ function stationNear(p, r = 50, depots = tool.mode === 'train' && !!tool.buy?.ro
 
 // track you can branch from: your own, or a line another company has opened to you (trackage rights)
 const branchable = (e) => e.owner === game.player.id || game.trackOpen(e.owner, game.player);
+// a signal that makes a block too short for the fastest train on offer to stop in (plus the distance a driver sees
+// the next signal from): such trains have to slow down there (see SIGHT in track.js)
+function shortBlockNote(edge, d) {
+  if (!edge.double || RULES.name === 'classic') return '';
+  const prev = Math.max(0, ...edge.signals.filter(s => s < d)), next = Math.min(edge.length, ...edge.signals.filter(s => s > d));
+  const len = Math.min(d - prev, next - d), ab = game.auctions.has('airbrake');
+  const fast = Math.max(...game.availableLocos().map(l => l.speed));
+  if (len + SIGHT >= stopDistance(fast, ab)) return '';
+  const mph = Math.sqrt(2 * BRAKE * (len + SIGHT)) / 0.5 / (ab ? 1.1 : 1);
+  return `<br><small class="warn">Short block (${Math.round(len)} m): trains faster than ${Math.floor(mph)} mph will slow down here to be able to stop at the next signal</small>`;
+}
 function onMove(e) {
   lastMouse = { x: e.clientX, y: e.clientY };
   if (e.target !== renderer.domElement) { if (ui.chipTip) ui.showChipTip(null); return; }
@@ -378,7 +389,7 @@ function onMove(e) {
   } else if (tool.mode === 'signal') {
     const jc = net.nearestTrack(p, 12, 'P');
     const err = jc ? net.signalSpotOk(jc.edge, jc.d) : null;
-    ui.tooltip(!jc ? 'Click a track to place a signal (splits it into blocks)' : err ? `<span class="bad">${err}</span>` : `Place signal · ${money(SIGNAL_COST)}<br><small>${jc.edge.double ? 'Lets several trains follow each other on this double track' : 'Single track is reserved station-to-station; signals pay off on double track'}</small>`, e.clientX, e.clientY);
+    ui.tooltip(!jc ? 'Click a track to place a signal (splits it into blocks)' : err ? `<span class="bad">${err}</span>` : `Place signal · ${money(SIGNAL_COST)}<br><small>${jc.edge.double ? 'Lets several trains follow each other on this double track' : 'Single track is reserved station-to-station; signals pay off on double track'}</small>${!err && jc ? shortBlockNote(jc.edge, jc.d) : ''}`, e.clientX, e.clientY);
   } else if (tool.mode === 'train') {
     const s = stationNear(p), ship = tool.buy && tool.buy.ship, plane = tool.buy && tool.buy.plane;
     ui.tooltip(s ? (ship && !s.harbor ? `<span class="bad">${s.name} has no harbor</span>` : plane && !s.airport ? `<span class="bad">${s.name} has no airfield</span>` : `Add stop: <b>${s.name}</b>`) : (ship ? 'Click stations with a harbor ⚓' : plane ? 'Click stations with an airfield ✈' : 'Click stations to add stops'), e.clientX, e.clientY);
@@ -604,7 +615,7 @@ function loop() {
   }
   smoke.update(dt * Math.max(0.5, Math.min(speed || 0.5, 2)));
   terrainView.update(dt);
-  trackView.updateSignalLights(game.blocks);
+  trackView.updateSignalLights(game);
   sky.position.copy(camera.position);
   renderer.render(scene, camera);
   ui.frame(dt);

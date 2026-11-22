@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { smoothstep, mulberry32 } from '../util.js';
 import { PartBuilder, canvasTexture } from './gfx.js';
-import { DOUBLE_OFF, PLATFORM2, SWITCH_LEN, HALF, tangentAt } from '../track.js';
+import { DOUBLE_OFF, PLATFORM2, SWITCH_LEN, HALF, tangentAt, LIGHT_SIGNALS_YEAR } from '../track.js';
 
 const ballastTex = canvasTexture(128, (g, s) => {
   const r = mulberry32(9);
@@ -22,6 +22,23 @@ const signalPostGeo = (() => {
 })();
 const signalPostMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7 });
 const lightGeo = new THREE.SphereGeometry(0.26, 10, 8);
+// the semaphore era: a pole with an arm that pivots up (upper quadrant: level = stop, 45 deg = approach, upright = clear)
+const semPoleGeo = (() => {
+  const b = new PartBuilder();
+  b.cyl(0.1, 0.15, 7.2, '#3a3936', 0, 3.6, 0, 8).cone(0.16, 0.35, '#3a3936', 0, 7.2, 0).box(0.4, 0.42, 0.3, '#171717', 0, 5.8, 0.12);
+  return b.build();
+})();
+const semArmGeo = (() => {
+  const b = new PartBuilder();
+  b.box(2.3, 0.34, 0.07, '#b3261e', 1.3, -0.17, 0.26).box(0.22, 0.36, 0.08, '#efece4', 1.95, -0.18, 0.26).box(0.25, 0.25, 0.1, '#1d1d1d', 0.05, -0.12, 0.24);
+  return b.build();
+})();
+const SHARED_GEO = new Set([sleeperGeo, signalPostGeo, lightGeo, semPoleGeo, semArmGeo]);
+// signal aspects: 0 stop (red), 1 approach (yellow: the next signal is at stop), 2 clear (green)
+const RED = 0, YELLOW = 1, GREEN = 2;
+const ARM_ANGLE = [0, Math.PI / 4, Math.PI / 2 * 0.96];
+const JHOME = 45; // a junction's signal stands where trains wait for it (the switch zone JZONE in sim.js + 5)
+const homeOff = (node) => node.type === 'junction' ? JHOME : HALF + SWITCH_LEN * 1.6 + 10 + 6; // (station: before the throat)
 const diamondGeo = new THREE.BoxGeometry(7.5, 0.12, 7.5), diamondMat = new THREE.MeshStandardMaterial({ color: '#4a4038', roughness: 0.9 });
 // the planning preview: a ribbon coloured along its length by grade (green on the flat, yellow, orange near the
 // limit, red beyond), so you see where a route is too steep; bridges are drawn blue and wider, cuttings purple;
@@ -45,7 +62,8 @@ export function gradeLine(pts, max, refused = false, bridge = null, cut = null) 
   return g;
 }
 export function gradePreview(pts, max, refused, bridge, cut) { const m = new THREE.Mesh(gradeLine(pts, max, refused, bridge, cut), previewMatGrade); m.renderOrder = 10; return m; }
-export const LIGHT_RED = new THREE.Color('#ff2a1a'), LIGHT_GREEN = new THREE.Color('#38ff6a');
+export const LIGHT_RED = new THREE.Color('#ff2a1a'), LIGHT_GREEN = new THREE.Color('#38ff6a'), LIGHT_YELLOW = new THREE.Color('#ffc21a');
+const LIGHT = [LIGHT_RED, LIGHT_YELLOW, LIGHT_GREEN];
 
 function ribbon(pts, profile, i0 = 0, i1 = pts.length - 1, uvScale = 0.25) {
   const pos = [], uv = [], idx = [];
@@ -99,7 +117,7 @@ export class TrackView {
     for (const g of [edge.group, edge.sigGroup]) if (g) {
       this.scene.remove(g);
       g.traverse(o => this.fine.delete(o));
-      g.traverse(o => { if (o.geometry && o.geometry !== sleeperGeo && o.geometry !== signalPostGeo && o.geometry !== lightGeo) o.geometry.dispose(); });
+      g.traverse(o => { if (o.geometry && !SHARED_GEO.has(o.geometry)) o.geometry.dispose(); if (g === edge.sigGroup && o.material?.isMeshBasicMaterial) o.material.dispose(); }); // (each lamp has its own)
     }
   }
   signalsChanged(edge) { this.buildSignals(edge); }
@@ -200,34 +218,99 @@ export class TrackView {
   }
   stationRemoved(st) { const g = st.trackGroup; if (!g) return; this.scene.remove(g); g.traverse(o => { this.fine.delete(o); if (o.geometry && o.geometry !== sleeperGeo) o.geometry.dispose(); }); st.trackGroup = null; }
 
+  // Signals: the player's block signals on the line (one head per direction), plus a home signal wherever a line
+  // meets a junction or station, standing where trains wait for it (part of the junction or station, not pickable).
+  // Semaphores until LIGHT_SIGNALS_YEAR, searchlight colour signals after. Aspects come from the reservations,
+  // see updateSignalLights.
   buildSignals(edge) {
     if (edge.sigGroup) { this.scene.remove(edge.sigGroup); edge.sigGroup.traverse(o => this.fine.delete(o)); edge.sigGroup.traverse(o => { if (o.material && o.material !== signalPostMat) o.material.dispose(); }); }
     const g = new THREE.Group(); edge.heads = [];
-    edge.signals.forEach((d, j) => {
+    const sem = this.style !== 'light';
+    const place = (d, dir, head, pick) => {
       const i = this.net.edgeIndexAt(edge, d);
       const p = this.net.edgePoint(edge, d), t = tangentAt(edge.pts, i);
-      for (const dir of [1, -1]) {
-        const lat = ((edge.double ? DOUBLE_OFF : 0) + 3.6) * dir;
-        const post = new THREE.Group();
-        post.position.set(p.x - t.z * lat, p.y - 0.3, p.z + t.x * lat);
-        post.rotation.y = Math.atan2(-t.x * dir, -t.z * dir);
+      const lat = ((edge.double ? DOUBLE_OFF * this.net.doubleW(edge, d) : 0) + 3.6) * dir;
+      const post = new THREE.Group();
+      post.position.set(p.x - t.z * lat, p.y - 0.3, p.z + t.x * lat);
+      post.rotation.y = Math.atan2(-t.x * dir, -t.z * dir);
+      const lm = new THREE.Mesh(lightGeo, new THREE.MeshBasicMaterial({ color: LIGHT_RED }));
+      if (sem) {
+        const pm = new THREE.Mesh(semPoleGeo, signalPostMat); pm.castShadow = true;
+        const arm = new THREE.Mesh(semArmGeo, signalPostMat); arm.position.set(0.12, 6.75, 0); arm.castShadow = true;
+        lm.position.set(0, 6.01, 0.3); lm.scale.setScalar(0.62);
+        post.add(pm, arm, lm); head.arm = arm;
+      } else {
         const pm = new THREE.Mesh(signalPostGeo, signalPostMat); pm.castShadow = true;
-        const lm = new THREE.Mesh(lightGeo, new THREE.MeshBasicMaterial({ color: LIGHT_GREEN }));
         lm.position.set(0, 5.35, 0.3);
         post.add(pm, lm);
-        post.traverse(o => o.userData.pick = { type: 'signal', edge, d });
-        g.add(post);
-        edge.heads.push({ light: lm, id: this.net.blockId(edge, dir > 0 ? j + 1 : j, dir) });
       }
+      post.traverse(o => o.userData.pick = pick);
+      head.light = lm; head.aspect = -1;
+      g.add(post); edge.heads.push(head);
+    };
+    edge.signals.forEach((d, j) => {
+      for (const dir of [1, -1]) place(d, dir, { kind: 'block', j, dir, b: dir > 0 ? j + 1 : j, id: this.net.blockId(edge, dir > 0 ? j + 1 : j, dir) }, { type: 'signal', edge, d });
     });
+    const oa = homeOff(edge.a), ob = homeOff(edge.b);
+    if (edge.length > oa + ob + 20) {
+      // (none right next to a block signal of the player's)
+      if (!edge.signals.some(s => Math.abs(s - (edge.length - ob)) < 25)) place(edge.length - ob, 1, { kind: 'home', node: edge.b, dir: 1 }, null);
+      if (!edge.signals.some(s => Math.abs(s - oa) < 25)) place(oa, -1, { kind: 'home', node: edge.a, dir: -1 }, null);
+    }
     edge.sigGroup = g;
     this.addFine(g);
     this.scene.add(g);
   }
-  updateSignalLights(blocks) {
-    for (const e of this.net.edges) for (const h of e.heads || []) {
-      const o = blocks.get(h.id);
-      h.light.material.color.copy(o && o.size ? LIGHT_RED : LIGHT_GREEN);
+  // Aspects, from the reservations (sim.js): a block signal shows stop while a train is in the block beyond it or
+  // holds it the other way; for the train cleared through it, clear if that train also holds what comes after,
+  // approach if not (it must stop at the next signal); with no train about, approach if the next block is taken.
+  // A home signal stays at stop until the nearest train approaching it has its way through the junction or into
+  // the station set (approach when it stops there).
+  updateSignalLights(game) {
+    const style = game.year < LIGHT_SIGNALS_YEAR ? 'sem' : 'light';
+    if (style !== this.style) { this.style = style; for (const e of this.net.edges) this.buildSignals(e); }
+    if (!this.detail || (this.tick = (this.tick || 0) + 1) % 4) return;
+    const blocks = game.blocks, net = this.net;
+    // the nearest train approaching each line end, for the home signals
+    const near = new Map();
+    for (const tr of game.trains) {
+      if (tr.state !== 'moving' || !tr.legRanges) continue;
+      for (const r of tr.legRanges) {
+        if (r.s1 < tr.s) continue;
+        const node = r.f ? r.edge.b : r.edge.a, dist = r.s1 - homeOff(node) - tr.s;
+        if (dist < -0.5) continue; // passed it
+        const key = r.edge.id + (r.f ? '>' : '<'), o = near.get(key);
+        if (!o || dist < o.dist) near.set(key, { tr, r, dist });
+        break; // (only the line it is on or about to enter: beyond that another train may be nearer)
+      }
+    }
+    for (const e of net.edges) for (const h of e.heads || []) {
+      let a = GREEN;
+      if (h.kind === 'block') {
+        const o = blocks.get(h.id);
+        if (o && o.size) {
+          a = RED;
+          if (o.size === 1) {
+            const tr = o.values().next().value, U = tr.units || [];
+            const k = U.findIndex(u => u.kind === 'block' && u.id === h.id && u.dir === h.dir && u.held && !u.released);
+            if (k >= 0 && tr.s <= U[k].s0) a = tr.next > k + 1 ? GREEN : YELLOW;
+          }
+        } else if (e.double) {
+          const b2 = h.b + h.dir;
+          if (b2 >= 0 && b2 <= e.signals.length && blocks.get(net.blockId(e, b2, h.dir))?.size) a = YELLOW;
+        }
+      } else {
+        a = RED;
+        const o = near.get(e.id + (h.dir > 0 ? '>' : '<'));
+        if (o) {
+          const u = o.tr.units.find(u => (u.kind === 'junction' || u.kind === 'station') && u.node === h.node && Math.abs(u.s - o.r.s1) < 1);
+          if (u && u.held && !u.released) a = u.kind === 'station' && u.final ? YELLOW : GREEN;
+        }
+      }
+      if (a !== h.aspect) {
+        h.aspect = a; h.light.material.color.copy(LIGHT[a]);
+        if (h.arm) h.arm.rotation.z = ARM_ANGLE[a];
+      }
     }
   }
 

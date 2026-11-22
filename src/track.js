@@ -11,6 +11,14 @@ export const PLATFORM2 = -9.2;      // local z of a station's second platform tr
 export const SWITCH_LEN = 26;       // length over which tracks diverge at switches
 export const JUNCTION_COST = 9000;
 export const SIGNAL_COST = 6000;
+// Signals are three-aspect (red, yellow, green). A driver only knows what the signals show: passing a green signal
+// (or seeing it from SIGHT m away) clears the next two blocks, a yellow one only the next block. So a train must
+// always be able to stop within one block plus SIGHT: shorter blocks than that slow fast trains down.
+// (continental rules; classic trains keep their perfect look-ahead.) BRAKE: deceleration in m/s².
+export const SIGHT = 30, BRAKE = 3.5;
+export const stopDistance = (mph, airbrake) => { const v = mph * 0.5 * (airbrake ? 1.1 : 1); return v * v / (2 * BRAKE); };
+// semaphore arms until this year, colour-light (searchlight) signals after
+export const LIGHT_SIGNALS_YEAR = 1915;
 // track crossings: a level crossing (diamond) is an interlocked lock shared by both lines; tracks at least
 // XING.clear m apart in height pass over/under each other (the upper one bridged) with no lock
 // endGap: crossings stay off platforms and switches (beyond them, near a station a crossing works like a busy flat
@@ -118,14 +126,19 @@ export class TrackNetwork {
       let G = LIM, need = 0; // (the grade the passes below keep to; with a chosen limit, the least these pins allow if steeper)
       const pinned = (i) => cum[i] <= ia.pinR ? ia.y : (ib && total - cum[i] <= ib.pinR ? ib.y : (extra ? extra.get(i) ?? null : null));
       for (let i = 0; i < ys.length; i++) { const p = pinned(i); if (p !== null) ys[i] = p; }
-      const tmp = new Array(ys.length);
+      // (the hot loop of planning: the pins are looked up once, and away from the ends the window needs no clamping;
+      // the sums are added in the same order as before, so the heights are exactly the same)
+      const n = ys.length, tmp = new Array(n), pinV = new Array(n);
+      for (let i = 0; i < n; i++) pinV[i] = pinned(i);
       for (let pass = 0; pass < 30; pass++) {
-        for (let i = 0; i < ys.length; i++) {
-          const p = pinned(i); if (p !== null) { tmp[i] = p; continue; }
-          let s = 0, c = 0; for (let k = -5; k <= 5; k++) { s += ys[clamp(i + k, 0, ys.length - 1)]; c++; }
-          tmp[i] = s / c;
+        for (let i = 0; i < n; i++) {
+          const p = pinV[i]; if (p !== null) { tmp[i] = p; continue; }
+          let s = 0;
+          if (i >= 5 && i < n - 5) for (let k = i - 5; k <= i + 5; k++) s += ys[k];
+          else for (let k = -5; k <= 5; k++) s += ys[clamp(i + k, 0, n - 1)];
+          tmp[i] = s / 11;
         }
-        for (let i = 0; i < ys.length; i++) ys[i] = tmp[i];
+        for (let i = 0; i < n; i++) ys[i] = tmp[i];
       }
       // a flatter limit than the default: keep every point within reach of the pinned heights (the ends, crossings)
       // at that grade, so the line climbs evenly instead of saving the climb for one step next to a station.
@@ -208,15 +221,16 @@ export class TrackNetwork {
     return out;
   }
   gridAdd(e) {
-    for (let j = 0; j < e.pts.length - 1; j++) for (const k of this.cellsOf(e.pts[j].x, e.pts[j].z, e.pts[j + 1].x, e.pts[j + 1].z)) {
-      let c = this.grid.get(k); if (!c) this.grid.set(k, c = []); c.push({ e, j });
-    }
+    // (one entry per segment, shared by all its cells, so near() can tell repeats apart by identity)
+    for (let j = 0; j < e.pts.length - 1; j++) { const x = { e, j }; for (const k of this.cellsOf(e.pts[j].x, e.pts[j].z, e.pts[j + 1].x, e.pts[j + 1].z)) {
+      let c = this.grid.get(k); if (!c) this.grid.set(k, c = []); c.push(x);
+    } }
   }
   gridRemove(e) { for (const [k, c] of this.grid) { const n = c.filter(x => x.e !== e); if (n.length) this.grid.set(k, n); else this.grid.delete(k); } }
   // other tracks' segments near segment i of pts (within m)
   near(a, b, m) {
     const seen = new Set(), out = [];
-    for (const k of this.cellsOf(a.x, a.z, b.x, b.z, m)) for (const x of this.grid.get(k) || []) { const key = x.e.id + ':' + x.j; if (!seen.has(key)) { seen.add(key); out.push(x); } }
+    for (const k of this.cellsOf(a.x, a.z, b.x, b.z, m)) for (const x of this.grid.get(k) || []) { if (!seen.has(x)) { seen.add(x); out.push(x); } }
     return out;
   }
   // where pts crosses other track: [{ i, s (along pts), e, j, d (along e), yo (e's height there), ang (degrees) }]
@@ -247,13 +261,24 @@ export class TrackNetwork {
     const incident = (e) => [A, B].some(n => n && (n.type === 'jc' ? n.edge === e : (e.a === n || e.b === n)));
     const out = { bad: null, pins: new Map(), forced: new Set(), list: [] };
     const fail = (m) => { if (!out.bad) out.bad = m; };
-    // a track never crosses itself
-    for (let i = 0; i < pts.length - 1 && !out.bad; i++) for (let j = i + 2; j < pts.length - 1; j++) {
+    // a track never crosses itself (segments are put in a coarse grid, so only nearby pairs are tested: it was every pair)
+    const SC = 16, sgrid = new Map(), cellsOf = (i, f) => {
+      const p = pts[i], q = pts[i + 1];
+      const x0 = Math.floor(Math.min(p.x, q.x) / SC), x1 = Math.floor(Math.max(p.x, q.x) / SC), z0 = Math.floor(Math.min(p.z, q.z) / SC), z1 = Math.floor(Math.max(p.z, q.z) / SC);
+      for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) f(x * 100003 + z);
+    };
+    for (let j = 0; j < pts.length - 1; j++) cellsOf(j, (k) => { const c = sgrid.get(k); if (c) c.push(j); else sgrid.set(k, [j]); });
+    const seenAt = new Int32Array(pts.length).fill(-1), cand = [];
+    for (let i = 0; i < pts.length - 1 && !out.bad; i++) {
+      cand.length = 0;
+      cellsOf(i, (k) => { for (const j of sgrid.get(k)) if (j >= i + 2 && seenAt[j] !== i) { seenAt[j] = i; cand.push(j); } });
+      for (const j of cand) {
       const p = pts[i], q = pts[i + 1], r = pts[j], v = pts[j + 1];
       if (Math.max(r.x, v.x) < Math.min(p.x, q.x) || Math.min(r.x, v.x) > Math.max(p.x, q.x) || Math.max(r.z, v.z) < Math.min(p.z, q.z) || Math.min(r.z, v.z) > Math.max(p.z, q.z)) continue;
       const den = (q.x - p.x) * (v.z - r.z) - (q.z - p.z) * (v.x - r.x); if (Math.abs(den) < 1e-9) continue;
       const tt = ((r.x - p.x) * (v.z - r.z) - (r.z - p.z) * (v.x - r.x)) / den, u = ((r.x - p.x) * (q.z - p.z) - (r.z - p.z) * (q.x - p.x)) / den;
       if (tt > 0 && tt < 1 && u > 0 && u < 1) { fail('The track crosses itself'); break; }
+      }
     }
     for (const x of this.intersections(pts, cum)) {
       const e = x.e;
@@ -275,9 +300,13 @@ export class TrackNetwork {
       out.list.push(x);
     }
     // never through a station (other than the ones it connects)
+    // (stations away from the line's bounding box are skipped: a point in a station is within 80 m of its centre)
+    let bx0 = Infinity, bx1 = -Infinity, bz0 = Infinity, bz1 = -Infinity;
+    for (const p of pts) { if (p.x < bx0) bx0 = p.x; if (p.x > bx1) bx1 = p.x; if (p.z < bz0) bz0 = p.z; if (p.z > bz1) bz1 = p.z; }
     for (const st of this.world.stations) {
       if (out.bad) break;
       if (st === A || st === B) continue; // (it was `break`: stations listed after its own ends went unchecked)
+      if (st.x < bx0 - 80 || st.x > bx1 + 80 || st.z < bz0 - 80 || st.z > bz1 + 80) continue;
       if (st.depot) { if (pts.some(p => Math.hypot(p.x - st.x, p.z - st.z) < 16)) fail(`Runs through ${st.name}`); continue; }
       if (Math.abs(st.x - pts[0].x) > total + 200 && Math.abs(st.x - pts[pts.length - 1].x) > total + 200) continue;
       if (pts.some(p => this.inStation(st, p))) fail(`Runs through ${st.name}`);

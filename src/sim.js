@@ -9,7 +9,7 @@ import { Frontier } from './frontier.js';
 import { Race } from './race.js';
 import { Vec3 } from './math.js';
 import { clamp, money, smoothstep, MAP_GEN } from './util.js';
-import { PLATFORM2, DOUBLE_OFF, SWITCH_LEN, SIGNAL_COST, XING } from './track.js';
+import { PLATFORM2, DOUBLE_OFF, SWITCH_LEN, SIGNAL_COST, XING, SIGHT, BRAKE } from './track.js';
 import { RoadNetwork } from './road.js';
 
 const START = new Date(1850, 0, 1);
@@ -19,7 +19,7 @@ const PLAT_OFFS = [0, PLATFORM2, PLATFORM2 * 2];
 export const SAVE_VERSION = 5; // 4: level crossings (v3 saves replay without them) · 5: roads and road vehicles
 const JZONE = 40;
 const GEAR = { biplane: 1.6, trimotor: 2.1, twin: 2.3, freighter: 3.0 }; // plane origin height above the runway // switch area around a junction, protected by its lock // main, 2nd platform, passing siding
-const _ta = new Vec3(), _tb = new Vec3();
+const _ta = new Vec3(), _tb = new Vec3(), _ga = new Vec3(), _gb = new Vec3();
 const STATION_NAMES_SUFFIX = ['Junction', 'Halt', 'Yard', 'Crossing', 'Siding', 'Depot'];
 
 export class Game {
@@ -637,7 +637,7 @@ export class Game {
       for (const b of order) {
         const d0 = bounds[b], d1 = bounds[b + 1];
         const a = f ? s0 + d0 : s0 + (e.length - d1), z = f ? s0 + d1 : s0 + (e.length - d0);
-        units.push({ kind: 'block', id: net.blockId(e, b, f ? 1 : -1), s0: a, s1: z, rel: z + 2, safe: e.double });
+        units.push({ kind: 'block', id: net.blockId(e, b, f ? 1 : -1), dir: f ? 1 : -1, s0: a, s1: z, rel: z + 2, safe: e.double });
       }
       tr.legRanges.push({ edge: e, f, s0, s1: s0 + e.length });
       s += e.length;
@@ -679,6 +679,13 @@ export class Game {
     const U = tr.units; if (tr.next >= U.length) return true;
     const chunk = [];
     for (let i = tr.next; i < U.length; i++) { chunk.push(U[i]); if (U[i].kind === 'station' || (U[i].kind === 'block' && U[i].safe)) break; }
+    // what the driver can see: a block behind a signal is only cleared once the train is within SIGHT of the
+    // signal before it (three aspects: green = two blocks clear, yellow = one), see SIGHT in track.js
+    // (not for a train standing still: one held at a level crossing short of the signal must still get its way)
+    if (RULES.name !== 'classic' && tr.speed > 0.5 && chunk[0].kind === 'block' && chunk[0].safe) {
+      let p = tr.next - 1; while (p > 0 && !(U[p].kind === 'block' && U[p].safe)) p--;
+      if (p > 0 && tr.s + SIGHT < U[p].s0) return false;
+    }
     const force = tr.wait > 240, platForce = tr.wait > 90;
     if (!force) for (const u of chunk) {
       if (u.kind === 'block') { const o = this.blocks.get(u.id); if (o && [...o].some(x => x !== tr)) return false; }
@@ -696,6 +703,18 @@ export class Game {
     tr.limit = this.limitFor(tr, last);
     if (force) this.emit('news', `⚠ ${tr.name} was blocked for 240 days — the dispatcher waved it through`);
     return true;
+  }
+  // continental rules: a signal at yellow means stop at the next one, so a train may only run as fast as it can stop
+  // within one block (+ SIGHT, where the driver sees the signal): short blocks slow fast trains. Applies to the
+  // signalled blocks it holds ahead (it brakes in time for a short one).
+  signalCap(tr) {
+    const U = tr.units; let cap = Infinity;
+    for (let i = tr.next - 1, n = 0; i > 0 && n < 12; i--, n++) {
+      const u = U[i]; if (u.s1 < tr.s) break;
+      if (u.kind !== 'block' || !u.safe) continue;
+      cap = Math.min(cap, Math.sqrt(2 * BRAKE * (u.s1 - u.s0 + SIGHT + Math.max(0, u.s0 - tr.s))));
+    }
+    return cap;
   }
   limitFor(tr, u) {
     if (u.kind === 'station') return u.final ? tr.sStop : u.s + HALF - 2;
@@ -859,7 +878,7 @@ export class Game {
     return this.pathAt(v.path, v.s, out);
   }
   gradeAt(tr, s) {
-    const a = new Vec3(), b = new Vec3();
+    const a = _ga, b = _gb; // (scratch: this runs for every moving train every tick)
     this.pointAt(tr, s - 6, a); this.pointAt(tr, s + 6, b);
     return (b.y - a.y) / 12;
   }
@@ -1545,7 +1564,10 @@ export class Game {
     if (this.ousted) return; // the game is over (load a save or start again)
     this.day += dtGame;
     // longest-waiting trains get first pick of freed track (first come, first served)
-    const order = [...this.trains].sort((a, b) => (b.waiting ? b.wait : -1) - (a.waiting ? a.wait : -1));
+    // (the waiting ones by how long they have waited, then the rest in their usual order: the same order a full
+    // stable sort gave, without sorting every train each tick)
+    const waiting = this.trains.filter(t => t.waiting);
+    const order = waiting.length ? [...waiting.sort((a, b) => b.wait - a.wait), ...this.trains.filter(t => !t.waiting)] : [...this.trains];
     try {
       for (const tr of order) { this.co = this.comp(tr.owner); this.updateTrain(tr, dtGame); }
       for (const sh of this.ships) { this.co = this.comp(sh.owner); this.updateShip(sh, dtGame); }
@@ -1571,16 +1593,17 @@ export class Game {
       return;
     }
     const sec = dt * ECON.daySeconds;
-    const brake = tr.speed * tr.speed / (2 * 3.5);
+    const brake = tr.speed * tr.speed / (2 * BRAKE);
     if (tr.next < tr.units.length && tr.limit - tr.s < brake + 60) { if (this.tryReserve(tr)) tr.wait = 0; }
     // heavy trains are slower, and much slower uphill
     const vBase = tr.loco.speed * 0.5 * (this.auctions.has('airbrake') ? 1.1 : 1);
     const grade = this.gradeAt(tr, tr.s);
     const loadF = this.trainTons(tr) / (tr.loco.power * 250);
     let vmax = vBase * (1 - clamp((loadF - 0.7) * 0.3, 0, 0.25)) * (1 - clamp(Math.max(0, grade) * 14 * loadF, 0, 0.7));
+    if (RULES.name !== 'classic') vmax = Math.min(vmax, this.signalCap(tr));
     const lim = tr.xunits?.length ? this.crossLimit(tr, brake) : tr.limit;
     const remain = lim - tr.s;
-    vmax = Math.min(vmax, Math.sqrt(2 * 3.5 * Math.max(0, remain)) + (remain > 0.3 ? 0.6 : 0));
+    vmax = Math.min(vmax, Math.sqrt(2 * BRAKE * Math.max(0, remain)) + (remain > 0.3 ? 0.6 : 0));
     if (tr.speed < vmax) tr.speed = Math.min(vmax, tr.speed + 2.5 * sec); else tr.speed = Math.max(vmax, tr.speed - 5 * sec);
     tr.s = Math.min(lim, tr.s + tr.speed * sec);
     tr.waiting = false;

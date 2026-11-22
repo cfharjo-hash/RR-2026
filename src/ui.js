@@ -71,7 +71,7 @@ export class UI {
     const hints = {
       select: '', station: 'Station: click to place · <b>Q</b>/<b>E</b> rotate · yellow ring = catchment',
       track: `${this.api.tool.double ? '<b>DOUBLE</b>' : '<b>SINGLE</b>'} track (G to switch) · max grade <button class="gr" data-gr="-1" title="Flatter (−)">−</button><b>${+(this.api.tool.grade * 100).toFixed(1)}%</b><button class="gr" data-gr="1" title="Steeper (+)">+</button> <small>(flatter: faster loaded trains, more bridges and cuttings)</small><br>Click a station or a track (junction), click points (they snap; Shift: free), click a station or a track · <b>right-click</b> steps back to Inspect · to double an existing line, click it with Inspect`,
-      signal: 'Signal: click a track to split it into blocks — most useful on double track',
+      signal: 'Signal: click a track to split it into blocks — most useful on double track · a fast train needs long blocks to stop in',
       road: 'Road: click one of your stations or depots (or a road), click points (they snap; Shift: free), click a stop or a road · roads are public · <b>right-click</b> undo · <b>Esc</b> cancel',
       depot: 'Road depot: click to place a small road stop (ring = catchment), then join it to a station or depot with a road (R)',
       train: 'Route: click stations in the order the train should visit', bulldoze: 'Bulldoze: click a track, a signal, a station (with its track) or one of your roads to remove it',
@@ -693,7 +693,7 @@ export class UI {
         <li><b>Train</b> (B): choose a locomotive and the right wagons — hoppers for coal and ore, flatcars for logs and steel, boxcars for goods, coaches for passengers — then click the stations in order and press <i>Start service</i>. More wagon types appear over the years.</li>
       </ol>
       <details class="more"><summary>More: junctions, markets, rivals${this.game.race.active ? ', the race west, the frontier' : ''}</summary><ul class="steps">
-        <li><b>Junctions &amp; signals</b>: start or end a track on an existing track to build a junction. Press G in the track tool for double track, and use Signal (N) to split it into blocks. To double a line you already have, click it and press <i>Upgrade to double track</i>. Single track is reserved station-to-station, so trains pass each other at stations.</li>
+        <li><b>Junctions &amp; signals</b>: start or end a track on an existing track to build a junction. Press G in the track tool for double track, and use Signal (N) to split it into blocks. To double a line you already have, click it and press <i>Upgrade to double track</i>. Single track is reserved station-to-station, so trains pass each other at stations. Signals show red, yellow (stop at the next signal) or green, as semaphore arms until 1915 and colour lights after. A train must be able to stop within one block, so blocks shorter than a fast train’s stopping distance slow it down.</li>
         <li><b>Value grows up the chain:</b> finished goods pay far more per wagon than raw materials (see Markets, M). Prices fall if you flood a market and rise where goods are scarce.</li>
         <li><b>Warehouses</b> (station panel) add storage and make a station a transfer hub. <b>Buy industries</b> (industry panel): expensive, but very profitable when you keep them supplied and shipping.</li>
         ${FEATURES.planes ? '' : '<!--'}<li><b>Aircraft</b> (J, from 1920): stations with open ground nearby can build an airfield ✈. Fast, best for passengers, mail and valuable goods.</li>${FEATURES.planes ? '' : '-->'}
