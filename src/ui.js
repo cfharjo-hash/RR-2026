@@ -240,21 +240,43 @@ export class UI {
     const parts = [...cargos].map(c => {
       const n = g.stored(st, c);
       if (n < 0.5 && c !== 'passengers' && c !== 'mail') return null;
-      const f = n / g.storageCap(st, c), cls = f >= 0.98 ? 'full' : f >= 0.7 ? 'warn' : '';
+      const cap = g.storageCap(st, c), f = n / cap, cls = f >= 0.98 ? 'full' : f >= 0.7 ? 'warn' : '';
       const icon = c === 'passengers' ? '👤' : c === 'mail' ? '✉' : `<i style="background:${CARGO[c]?.color || '#999'}"></i>`;
-      return { n, c, html: `<span class="${cls}" title="${CARGO[c]?.name || c}">${icon}${Math.round(n)}</span>` };
+      const tip = `<b>${CARGO[c]?.name || c}</b>: ${Math.round(n)} waiting · room for ${Math.round(cap)}${cls === 'full' ? ' — full, more is being lost' : cls === 'warn' ? ' — filling up' : ''}`;
+      return { n, c, html: `<span class="${cls}" data-tip="${tip.replace(/"/g, '&quot;')}">${icon}${Math.round(n)}</span>` };
     }).filter(Boolean).sort((a, b) => (b.c === 'passengers') - (a.c === 'passengers') || (b.c === 'mail') - (a.c === 'mail') || b.n - a.n).slice(0, 7);
     const key = st.name + '|' + parts.map(p => p.html).join('');
     if (l.key === key) return;
     l.key = key;
     l.e.innerHTML = parts.length ? `${st.name}<em class="cnt">${parts.map(p => p.html).join('')}</em>` : st.name;
   }
+  // the hover text of a counter chip on a station or industry label under the cursor (labels let clicks through to
+  // the map, so this is a hit test rather than a DOM hover)
+  labelTipAt(x, y) {
+    for (const l of this.labels) {
+      if (!l.vis || (l.kind !== 'sta' && l.kind !== 'ind') || !l.key) continue;
+      const r = l.e.getBoundingClientRect();
+      if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue;
+      for (const s of l.e.querySelectorAll('[data-tip]')) {
+        const q = s.getBoundingClientRect();
+        if (x >= q.left - 2 && x <= q.right + 2 && y >= q.top - 2 && y <= q.bottom + 2) return s.dataset.tip;
+      }
+    }
+    return null;
+  }
+  // show (or clear) the chip tooltip at a cursor position; kept fresh in frame() while the camera or counts move
+  showChipTip(m) {
+    const tip = m && this.labelTipAt(m.x, m.y);
+    if (tip) { this.chipTip = m; if (tip !== this.chipHtml) this.tooltip(this.chipHtml = tip, m.x, m.y); return true; }
+    if (this.chipTip) { this.chipTip = this.chipHtml = null; this.tooltip(null); }
+    return false;
+  }
   // what an industry made last month, on its map label (close up): each output with units/month and the share hauled
   industryCounter(l, d) {
     const i = l.o, out = Object.keys(i.def.out), near = d < 1100;
     const parts = near ? out.map(c => {
       const p = Math.round(i.producedLastMonth?.[c] || 0), t = i.transportedLastMonth?.[c] || 0;
-      return `<span title="${CARGO[c]?.name || c}: ${p} made last month, ${Math.round(t)} hauled away"><i style="background:${CARGO[c]?.color || '#999'}"></i>${p}/mo${p ? `<small>${Math.round(Math.min(1, t / p) * 100)}% hauled</small>` : ''}</span>`;
+      return `<span data-tip="<b>${CARGO[c]?.name || c}</b>: ${p} made last month, ${Math.round(t)} hauled away"><i style="background:${CARGO[c]?.color || '#999'}"></i>${p}/mo${p ? `<small>${Math.round(Math.min(1, t / p) * 100)}% hauled</small>` : ''}</span>`;
     }) : [];
     const key = parts.join('');
     if (l.key === key) return;
@@ -296,6 +318,7 @@ export class UI {
       if (px !== l.px || py !== l.py) { l.px = px; l.py = py; l.e.style.transform = `translate(-50%,-100%) translate(${px}px,${py}px)`; }
       if (l.kind === 'ind') { const op = Math.round(Math.max(0.35, 1 - d / 1600) * 20) / 20; if (op !== l.op) { l.op = op; l.e.style.opacity = op; } }
     }
+    if (this.chipTip && (this.chipTick = (this.chipTick || 0) + 1) % 6 === 0) this.showChipTip(this.api.tool.mode === 'select' ? this.chipTip : null);
     for (const f of this.floats) {
       f.t += dt; v.copy(f.pos); v.y += f.t * 6; v.project(cam);
       f.el.style.transform = `translate(-50%,-100%) translate(${(v.x + 1) / 2 * innerWidth}px,${(1 - v.y) / 2 * innerHeight}px)`;

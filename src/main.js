@@ -308,8 +308,9 @@ function stationNear(p, r = 50, depots = tool.mode === 'train' && !!tool.buy?.ro
 const branchable = (e) => e.owner === game.player.id || game.trackOpen(e.owner, game.player);
 function onMove(e) {
   lastMouse = { x: e.clientX, y: e.clientY };
-  if (e.target !== renderer.domElement) return;
+  if (e.target !== renderer.domElement) { if (ui.chipTip) ui.showChipTip(null); return; }
   const p = terrainPoint(e); tool.hover = p;
+  if (ui.showChipTip(tool.mode === 'select' ? lastMouse : null)) return;
   if (api.heights && tool.mode === 'select') {
     if (!p) { ui.tooltip(null); return; }
     const g = terrain.slopeAt(p.x, p.z, 8);
