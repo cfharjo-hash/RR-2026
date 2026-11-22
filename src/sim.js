@@ -276,7 +276,7 @@ export class Game {
     if (ind.def.consumer) return 'Customers cannot be bought';
     if (ind.owner) return ind.owner === this.co.id ? 'You already own it' : `Owned by ${this.comp(ind.owner).name}`;
     if (ind.dormant) return 'Not founded yet';
-    if (ind.auction) return 'It is up for auction — bid in Auctions (A)';
+    if (ind.auction) return 'It is up for auction — bid in Auctions (I)';
     const p = this.industryPrice(ind);
     if (!this.canAfford(p)) return `Not enough money (${money(p)})`;
     this.spend(p, 'industries'); ind.paid = p;

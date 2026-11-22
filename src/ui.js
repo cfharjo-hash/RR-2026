@@ -454,7 +454,7 @@ export class UI {
     const st = g.stationsOf(me).filter(s => !s.depot).length, tracks = g.net.edges.some(e => e.owner === me.id), trains = g.trains.some(t => t.owner === me.id);
     const big = this.world.terrain.cont;
     const list = [
-      ['station', st === 0, 'Press <b>S</b> and click near a town or an industry to place your first station. Hover first: the tooltip shows what a site supplies and accepts.'],
+      ['station', st === 0, 'Press <b>Q</b> and click near a town or an industry to place your first station. Hover first: the tooltip shows what a site supplies and accepts.'],
       ['station2', st === 1, 'Place a second station where the first one’s goods are wanted: another town for passengers and mail, or a works that takes the cargo (an industry’s panel lists its buyers).'],
       ['track', st >= 2 && !tracks, 'Press <b>T</b>, click one station, then the other. The cost and the steepest grade show as you go; right-click takes back the last point.'],
       ['train', tracks && !trains, 'Press <b>B</b> to buy a train: a locomotive and wagons for the cargo. Click your stations in order, then <i>Start service</i>.'],
@@ -687,7 +687,7 @@ export class UI {
       production tree, and grow your company's value by <b>${this.game.deadline}</b>: ${this.game.medalTiers.map(m => `${m.icon} <b>${moneyShort(m.value)}</b>`).join(' · ')}.</p>
       <h4>Your first line</h4>
       <ol class="steps">
-        <li><b>Station</b> (S): place one near an industry (e.g. a Coal Mine) and another near something that accepts its cargo (a Steel Mill). Hover to see what a site supplies and accepts.</li>
+        <li><b>Station</b> (Q): place one near an industry (e.g. a Coal Mine) and another near something that accepts its cargo (a Steel Mill). Hover to see what a site supplies and accepts.</li>
         <li><b>Track</b> (T): click the first station, optionally click waypoints around hills, then click the second station.</li>
         <li><b>Train</b> (B): choose a locomotive and the right wagons — hoppers for coal and ore, flatcars for logs and steel, boxcars for goods, coaches for passengers — then click the stations in order and press <i>Start service</i>. More wagon types appear over the years.</li>
       </ol>
@@ -703,7 +703,7 @@ export class UI {
         ${this.game.frontier.active ? '<li><b>The frontier</b> (click the line under the date): the west starts as territories. Serve their towns and they grow; new industries and towns follow. Track built there earns a land grant per mile until the territory becomes a state. In <b>wartime</b> the army buys several times as much.</li>' : ''}
         <li>Open the <b>Production chain</b> (P) to plan deeper chains. Tools &amp; Machinery delivered back to farms and mines boost their output.</li>
       </ul></details>
-      <p class="muted">Camera: left-drag pan · right-drag rotate · wheel zoom · arrows/WAD pan${this.world.terrain.cont ? ' · Home: the whole map · /: find a town · the overview map (bottom right): click or drag' : ''}. Speed: 1-4, Space pause. Ledger (L), Trains (V), News (Y), Bulldoze (X).</p>
+      <p class="muted">Camera: left-drag pan · right-drag rotate · wheel zoom · W A S D or arrows pan${this.world.terrain.cont ? ' · Home: the whole map · /: find a town · the overview map (bottom right): click or drag' : ''}. Speed: 1-4, Space pause. Ledger (L), Trains (V), News (Y), Bulldoze (X).</p>
       <label class="muted"><input type="checkbox" id="w-tips" ${this.tipsOn() ? 'checked' : ''}> Show tips while I play</label>
       ${this.game.actions.some(a => !a.o) || this.game.day > 60 ? `<p class="muted">Map ${this.api.map ? '#' + this.api.map : '0 (the original map)'}</p>` : `
       <div class="map-row">Map <input id="w-map" type="number" min="0" max="99999" value="${this.api.map}"> <button id="w-map-go">Play this map</button> <button id="w-map-rnd">Random map</button>

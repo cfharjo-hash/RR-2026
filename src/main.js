@@ -123,9 +123,16 @@ controls.enableDamping = true; controls.dampingFactor = 0.12;
 controls.maxPolarAngle = 1.38; controls.minDistance = 22; controls.maxDistance = terrain.S > 3000 ? 15000 : 3200;
 if (terrain.S > 3000) scene.fog.density = 0.000045;
 controls.zoomSpeed = 1.4; controls.screenSpacePanning = false;
-const keys = new Set();
-addEventListener('keydown', e => { if (e.target.tagName === 'INPUT') return; keys.add(e.key.toLowerCase()); onKey(e); });
-addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
+// camera pan keys go by physical position (e.code), so W A S D sit in the same place on any layout (Z Q S D on AZERTY)
+const keys = new Set(), PAN_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
+const modKey = (e) => e.ctrlKey || e.metaKey || e.altKey;
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+  if (PAN_KEYS.has(e.code) && !modKey(e)) { keys.add(e.code); return; }
+  onKey(e);
+});
+addEventListener('keyup', e => keys.delete(e.code));
+addEventListener('blur', () => keys.clear()); // (no stuck pan after alt-tab)
 addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
 // ---------------- particles (smoke) ----------------
@@ -491,15 +498,15 @@ function onClick(e) {
   }
 }
 function onKey(e) {
-  const k = e.key.toLowerCase();
+  const k = e.key.toLowerCase(), q = e.code === 'KeyQ' && !modKey(e); // (Q by physical key, beside W A S D on any layout)
   if (k === 'escape' && api.follow) { api.follow = null; return; }
   if (k === 'escape') { if ((tool.mode === 'track' || tool.mode === 'road') && tool.from) { tool.from = null; tool.wps = []; refreshWps(); trackView.showPreview(null); roadView.showPreview(null); } else { api.setTool('select'); ui.closeModals(); ui.inspect(null); } }
   else if (k === 'r' && tool.mode === 'station') { tool.angle += Math.PI / 12; onMove({ ...lastMouse, clientX: lastMouse.x, clientY: lastMouse.y, target: renderer.domElement }); }
   else if (k === 'backspace' && (tool.mode === 'track' || tool.mode === 'road')) { tool.wps.pop(); refreshWps(); onMove({ clientX: lastMouse.x, clientY: lastMouse.y, target: renderer.domElement }); }
-  else if (k === 'q' && tool.mode === 'station') { tool.angle -= Math.PI / 12; onMove({ clientX: lastMouse.x, clientY: lastMouse.y, target: renderer.domElement }); }
+  else if (q && tool.mode === 'station') { tool.angle -= Math.PI / 12; onMove({ clientX: lastMouse.x, clientY: lastMouse.y, target: renderer.domElement }); }
   else if (k === ' ') { e.preventDefault(); ui.togglePause(); }
   else if (k === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); api.save('quick'); }
-  else if (k === 's') api.setTool('station');
+  else if (q) api.setTool('station'); // (S pans the camera; in the station tool Q and R rotate)
   else if (k === 't') api.setTool('track');
   else if (k === 'b') ui.openBuyTrain();
   else if (k === 'h' && FEATURES.ships) ui.openBuyShip();
@@ -518,7 +525,7 @@ function onKey(e) {
   else if (k === 'm') ui.openMarkets();
   else if (k === 'f') ui.openFinance();
   else if (k === 'c') ui.openRivals();
-  else if (k === 'a') ui.openAuctions();
+  else if (k === 'i') ui.openAuctions();
   else if (k === 'v') ui.openTrains();
   else if (k === 'home') api.overview();
   else if (k === 'y') ui.openNewsLog();
@@ -536,10 +543,10 @@ function loop() {
   const pan = new THREE.Vector3();
   const fwd = new THREE.Vector3().subVectors(controls.target, camera.position).setY(0).normalize();
   const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
-  if (keys.has('w') || keys.has('arrowup')) pan.add(fwd);
-  if (keys.has('arrowdown')) pan.sub(fwd);
-  if (keys.has('a') || keys.has('arrowleft')) pan.sub(right);
-  if (keys.has('d') || keys.has('arrowright')) pan.add(right);
+  if (keys.has('KeyW') || keys.has('ArrowUp')) pan.add(fwd);
+  if (keys.has('KeyS') || keys.has('ArrowDown')) pan.sub(fwd);
+  if (keys.has('KeyA') || keys.has('ArrowLeft')) pan.sub(right);
+  if (keys.has('KeyD') || keys.has('ArrowRight')) pan.add(right);
   if (pan.lengthSq() > 0) {
     const dist = camera.position.distanceTo(controls.target);
     pan.normalize().multiplyScalar(dt * (200 + dist * 1.1));

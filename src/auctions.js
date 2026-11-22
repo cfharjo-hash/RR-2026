@@ -46,7 +46,7 @@ export class Auctions {
     this.open.push(a);
     if (kind === 'industry') this.ind(ref).auction = a.id;
     const what = kind === 'tech' ? `the patent for <b>${INVENTIONS[ref].name}</b> (${INVENTIONS[ref].desc.toLowerCase()})` : `<b>${this.title(a)}</b>${seller ? ` (sold by ${seller === g.player.id ? 'you' : g.comp(seller).name})` : ', a newly founded industry'}`;
-    g.newsFor(null, `🔨 Auction: ${what} — sealed bids until ${this.dateOf(a.closes)}, reserve ${money(a.reserve)}. Bid in Auctions (A).`);
+    g.newsFor(null, `🔨 Auction: ${what} — sealed bids until ${this.dateOf(a.closes)}, reserve ${money(a.reserve)}. Bid in Auctions (I).`);
     g.emit('changed');
     return a;
   }
