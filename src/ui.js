@@ -69,7 +69,7 @@ export class UI {
     document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === m));
     $('#orders').classList.toggle('hide', m !== 'train');
     const hints = {
-      select: '', station: 'Station: click to place · <b>R/Q</b> rotate · yellow ring = catchment',
+      select: '', station: 'Station: click to place · <b>Q</b>/<b>E</b> rotate · yellow ring = catchment',
       track: `${this.api.tool.double ? '<b>DOUBLE</b>' : '<b>SINGLE</b>'} track (G to switch) · max grade <button class="gr" data-gr="-1" title="Flatter (−)">−</button><b>${+(this.api.tool.grade * 100).toFixed(1)}%</b><button class="gr" data-gr="1" title="Steeper (+)">+</button> <small>(flatter: faster loaded trains, more bridges and cuttings)</small><br>Click a station or a track (junction), click points (they snap; Shift: free), click a station or a track · <b>right-click</b> steps back to Inspect · to double an existing line, click it with Inspect`,
       signal: 'Signal: click a track to split it into blocks — most useful on double track',
       road: 'Road: click one of your stations or depots (or a road), click points (they snap; Shift: free), click a stop or a road · roads are public · <b>right-click</b> undo · <b>Esc</b> cancel',

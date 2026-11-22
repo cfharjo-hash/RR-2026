@@ -501,12 +501,12 @@ function onKey(e) {
   const k = e.key.toLowerCase(), q = e.code === 'KeyQ' && !modKey(e); // (Q by physical key, beside W A S D on any layout)
   if (k === 'escape' && api.follow) { api.follow = null; return; }
   if (k === 'escape') { if ((tool.mode === 'track' || tool.mode === 'road') && tool.from) { tool.from = null; tool.wps = []; refreshWps(); trackView.showPreview(null); roadView.showPreview(null); } else { api.setTool('select'); ui.closeModals(); ui.inspect(null); } }
-  else if (k === 'r' && tool.mode === 'station') { tool.angle += Math.PI / 12; onMove({ ...lastMouse, clientX: lastMouse.x, clientY: lastMouse.y, target: renderer.domElement }); }
+  else if ((k === 'r' || (e.code === 'KeyE' && !modKey(e))) && tool.mode === 'station') { tool.angle += Math.PI / 12; onMove({ ...lastMouse, clientX: lastMouse.x, clientY: lastMouse.y, target: renderer.domElement }); }
   else if (k === 'backspace' && (tool.mode === 'track' || tool.mode === 'road')) { tool.wps.pop(); refreshWps(); onMove({ clientX: lastMouse.x, clientY: lastMouse.y, target: renderer.domElement }); }
   else if (q && tool.mode === 'station') { tool.angle -= Math.PI / 12; onMove({ clientX: lastMouse.x, clientY: lastMouse.y, target: renderer.domElement }); }
   else if (k === ' ') { e.preventDefault(); ui.togglePause(); }
   else if (k === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); api.save('quick'); }
-  else if (q) api.setTool('station'); // (S pans the camera; in the station tool Q and R rotate)
+  else if (q) api.setTool('station'); // (S pans the camera; in the station tool Q and E rotate (R too))
   else if (k === 't') api.setTool('track');
   else if (k === 'b') ui.openBuyTrain();
   else if (k === 'h' && FEATURES.ships) ui.openBuyShip();
