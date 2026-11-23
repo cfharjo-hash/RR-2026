@@ -1,4 +1,5 @@
 // The track network: planning, earthworks, junctions, signals and routing (pure; drawn by view/trackView.js).
+import { sin as dsin, cos as dcos } from './dmath.js';
 import { ECON } from './data.js';
 import { smoothstep, clamp } from './util.js';
 import { Vec3, CatmullRom } from './math.js';
@@ -28,6 +29,8 @@ export const LIGHT_SIGNALS_YEAR = 1915;
 export const XING = { cost: 8000, fee: 10000, minAngle: 15, clear: 8, minClear: 6, zone: 12, sep: 4.5, nearSignal: 35, endGap: 6, connect: 60, runIn: 40, apart: 20 };
 const CELL = 24;
 export const HALF = ECON.platformLen / 2;
+// half a station's platform: standard stations (and road depots) have ECON.platformLen, long ones their own `len`
+export const halfOf = (st) => (st.len || ECON.platformLen) / 2;
 
 export const tangentAt = (pts, i) => {
   const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
@@ -46,9 +49,9 @@ export class TrackNetwork {
   }
 
   // ---------- helpers ----------
-  endFree(node) { return node.type === 'station' ? HALF : 0; }
+  endFree(node) { return node.type === 'station' ? halfOf(node) : 0; }
   // where a track's end is too busy for a crossing: the platform (or the switch point of a junction)
-  endZone(node) { return (node.type === 'station' ? HALF + 4 : 12) + XING.endGap; }
+  endZone(node) { return (node.type === 'station' ? halfOf(node) + 4 : 12) + XING.endGap; }
   // 0..1: how far apart the two lines of a double track are at distance d along the edge
   doubleW(edge, d) {
     const fa = this.endFree(edge.a) + 4, fb = this.endFree(edge.b) + 4;
@@ -87,8 +90,8 @@ export class TrackNetwork {
   endInfo(node, target) {
     if (node.type === 'station') {
       const side = Math.sign((target.x - node.x) * node.axis.x + (target.z - node.z) * node.axis.z) || 1;
-      const end = new Vec3(node.x + node.axis.x * side * HALF, 0, node.z + node.axis.z * side * HALF);
-      return { side, ctrl: [new Vec3(node.x, 0, node.z), end, end.clone().addScaledVector(node.axis, side * 22)], pinR: HALF + 4, y: node.y };
+      const H = halfOf(node), end = new Vec3(node.x + node.axis.x * side * H, 0, node.z + node.axis.z * side * H);
+      return { side, ctrl: [new Vec3(node.x, 0, node.z), end, end.clone().addScaledVector(node.axis, side * 22)], pinR: H + 4, y: node.y };
     }
     const side = Math.sign((target.x - node.p.x) * node.t.x + (target.z - node.p.z) * node.t.z) || 1;
     const p0 = new Vec3(node.p.x, 0, node.p.z);
@@ -306,7 +309,8 @@ export class TrackNetwork {
     for (const st of this.world.stations) {
       if (out.bad) break;
       if (st === A || st === B) continue; // (it was `break`: stations listed after its own ends went unchecked)
-      if (st.x < bx0 - 80 || st.x > bx1 + 80 || st.z < bz0 - 80 || st.z > bz1 + 80) continue;
+      const M = 80 + halfOf(st) - HALF; // (more for a long station)
+      if (st.x < bx0 - M || st.x > bx1 + M || st.z < bz0 - M || st.z > bz1 + M) continue;
       if (st.depot) { if (pts.some(p => Math.hypot(p.x - st.x, p.z - st.z) < 16)) fail(`Runs through ${st.name}`); continue; }
       if (Math.abs(st.x - pts[0].x) > total + 200 && Math.abs(st.x - pts[pts.length - 1].x) > total + 200) continue;
       if (pts.some(p => this.inStation(st, p))) fail(`Runs through ${st.name}`);
@@ -335,14 +339,14 @@ export class TrackNetwork {
   }
   // is point p on station st's footprint (platforms, siding and switches)?
   inStation(st, p) {
-    const L = HALF + SWITCH_LEN * 1.6, W = -PLATFORM2 * 2 + 5, dx = p.x - st.x, dz = p.z - st.z;
+    const L = halfOf(st) + SWITCH_LEN * 1.6, W = -PLATFORM2 * 2 + 5, dx = p.x - st.x, dz = p.z - st.z;
     const lx = dx * st.axis.x + dz * st.axis.z, lz = -dx * st.axis.z + dz * st.axis.x;
     return Math.abs(lx) < L && lz > -W && lz < 5;
   }
   // would a station here (its platforms, siding and switches) lie on existing track?
-  stationClear(x, z, angle) {
+  stationClear(x, z, angle, len = ECON.platformLen) {
     if (this.legacy) return true;
-    const ca = Math.cos(angle), sa = Math.sin(angle), L = HALF + SWITCH_LEN * 1.6, W = -PLATFORM2 * 2 + 5;
+    const ca = dcos(angle), sa = dsin(angle), L = len / 2 + SWITCH_LEN * 1.6, W = -PLATFORM2 * 2 + 5;
     for (const { e, j } of this.near({ x: x - L, z: z - L }, { x: x + L, z: z + L }, 0)) for (const p of [e.pts[j], e.pts[j + 1]]) {
       const dx = p.x - x, dz = p.z - z, lx = dx * ca + dz * sa, lz = -dx * sa + dz * ca;
       if (Math.abs(lx) < L && lz > -W && lz < 5) return false;
@@ -356,7 +360,7 @@ export class TrackNetwork {
     // start together, they don't cross; plans refuse other cases)
     const inZone = (s) => s < this.endZone(edge.a) || edge.length - s < this.endZone(edge.b);
     const at = (e, n) => e.a === n || e.b === n;
-    const run = (n) => (n.type === 'station' ? HALF + 4 : 12) + XING.runIn;
+    const run = (n) => (n.type === 'station' ? halfOf(n) + 4 : 12) + XING.runIn;
     const meets = (x) => (x.s < run(edge.a) && at(x.e, edge.a)) || (edge.length - x.s < run(edge.b) && at(x.e, edge.b));
     for (const x of this.intersections(edge.pts, edge.cum)) {
       if (x.e === edge || inZone(x.s) || meets(x)) continue;
@@ -429,7 +433,7 @@ export class TrackNetwork {
   canDouble(edge) {
     if (edge.double) return 'Already double track';
     const pts = edge.pts, cum = edge.cum, total = edge.length;
-    const endG = (n) => (n.type === 'station' ? HALF : 0) + SWITCH_LEN + 12;
+    const endG = (n) => (n.type === 'station' ? halfOf(n) : 0) + SWITCH_LEN + 12;
     const incident = (e) => [edge.a, edge.b].some(n => e.a === n || e.b === n);
     const X = this.intersections(pts, cum).filter(x => x.e !== edge); // (where other tracks cross it, level or not)
     for (let i = 0; i < pts.length; i++) {
@@ -443,7 +447,7 @@ export class TrackNetwork {
         const tt = clamp(((p.x - r.x) * vx + (p.z - r.z) * vz) / l2, 0, 1);
         if (Math.hypot(p.x - r.x - vx * tt, p.z - r.z - vz * tt) < XING.sep + DOUBLE_OFF + (e.double ? DOUBLE_OFF : 0)) return 'Another track runs too close alongside for a second track';
       }
-      for (const st of this.world.stations) if (st !== edge.a && st !== edge.b && Math.hypot(st.x - p.x, st.z - p.z) < 120 && this.inStation(st, p)) return `It runs too close to ${st.name}`;
+      for (const st of this.world.stations) if (st !== edge.a && st !== edge.b && Math.hypot(st.x - p.x, st.z - p.z) < 120 + halfOf(st) - HALF && this.inStation(st, p)) return `It runs too close to ${st.name}`;
     }
     return null;
   }

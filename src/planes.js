@@ -1,4 +1,5 @@
 // Aviation: airfield siting and flight paths (pure; the models are in view/craftModels.js).
+import { sin as dsin, cos as dcos } from './dmath.js';
 import { clamp, lerp } from './util.js';
 import { Vec3, CatmullRom } from './math.js';
 import { ECON } from './data.js';
@@ -15,9 +16,9 @@ export function findAirportSite(world, net, st) {
   const t = world.terrain, L = ECON.runwayLen;
   let best = null;
   for (let r = 110; r <= ECON.airportReach; r += 30) for (let k = 0; k < 16; k++) {
-    const a = k / 16 * Math.PI * 2, cx = st.x + Math.cos(a) * r, cz = st.z + Math.sin(a) * r;
+    const a = k / 16 * Math.PI * 2, cx = st.x + dcos(a) * r, cz = st.z + dsin(a) * r;
     for (let o = 0; o < 6; o++) {
-      const ang = o / 6 * Math.PI, dx = Math.cos(ang), dz = Math.sin(ang);
+      const ang = o / 6 * Math.PI, dx = dcos(ang), dz = dsin(ang);
       const cand = { x: cx, z: cz, dx, dz, len: L };
       let mn = 1e9, mx = -1e9, ok = true, sum = 0, n = 0;
       for (let u = -L / 2 - 20; u <= L / 2 + 20 && ok; u += 20) for (const v of [-24, 0, 24]) {

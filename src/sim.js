@@ -1,3 +1,4 @@
+import { pow as dpow } from './dmath.js';
 import { CARGO, INDUSTRY, LOCOS, ECON, WAGONS, SHIPS, PLANES, ROAD_VEHICLES, FEATURES, RULES, TOWN_ACCEPTS, TOWN_GROWTH, TOWN_DEMAND, LEVEL_MUL, AUCTION, LOCO_LEN, WAGON_LEN } from './data.js';
 import { CompanyAI, DIFFICULTY, PERSONALITIES } from './ai.js';
 import { findAirportSite, flightPath } from './planes.js';
@@ -9,12 +10,20 @@ import { Frontier } from './frontier.js';
 import { Race } from './race.js';
 import { Vec3 } from './math.js';
 import { clamp, money, smoothstep, MAP_GEN } from './util.js';
-import { PLATFORM2, DOUBLE_OFF, SWITCH_LEN, SIGNAL_COST, XING, SIGHT, BRAKE } from './track.js';
+import { PLATFORM2, DOUBLE_OFF, SWITCH_LEN, SIGNAL_COST, XING, SIGHT, BRAKE, halfOf } from './track.js';
 import { RoadNetwork } from './road.js';
 
 const START = new Date(1850, 0, 1);
 export { LEVEL_MUL };
-const HALF = ECON.platformLen / 2, BACK = 90, MAX_WAGONS = 6;
+const HALF = ECON.platformLen / 2, BACK = 90, MAX_WAGONS = 16;
+// station platform lengths (m) and what each costs, as a multiple of ECON.stationCost: standard, long, grand
+export const STATION_LENS = { 64: 1, 128: 1.7, 192: 2.4 };
+// the run-up behind a train's start: BACK, more at a long station (so the whole platform is on its path)
+const backOf = (st) => BACK + halfOf(st) - HALF;
+// a train's run-up behind its start: enough for the whole train when it is longer than the platform
+const backFor = (tr, st) => Math.max(backOf(st), tr.len - halfOf(st) + 10);
+// a train longer than this station's platform (its tail, or its head, stands in the switch area beyond it)
+const overhangs = (tr, st) => tr.len > 2 * halfOf(st) + 2;
 const PLAT_OFFS = [0, PLATFORM2, PLATFORM2 * 2];
 export const SAVE_VERSION = 5; // 4: level crossings (v3 saves replay without them) · 5: roads and road vehicles
 const JZONE = 40;
@@ -184,7 +193,7 @@ export class Game {
   companyValue(c = this.co) { return c.cash - c.loan + this.trainValue(c) + this.trackValue(c) * 0.6 + this.stationsOf(c).length * ECON.stationCost * 0.6 + this.industryValue(c) + this.warehouseValue(c) + this.market.stakeValue(c.id); }
 
   // ---------------- economy ----------------
-  infl() { return Math.pow(1 + ECON.inflation, this.day / 365); }
+  infl() { return dpow(1 + ECON.inflation, this.day / 365); }
   value(c) { return CARGO[c].value * this.infl(); }
   wagonCost(type) { return Math.round(WAGONS[type].cost * this.infl() / 100) * 100; }
   locoCost(l) { return Math.round(l.cost * this.infl() / 100) * 100; }
@@ -203,7 +212,7 @@ export class Game {
   }
   setConsist(tr, consist) {
     if (!this.mine(tr) || tr.type !== 'train') return 'Not your train';
-    const max = Math.min(tr.loco.maxCars, MAX_WAGONS);
+    const max = this.maxWagons(tr.loco, tr.orders);
     if (!consist || !consist.length) return 'Keep at least one wagon';
     if (consist.length > max) return `${tr.loco.name} pulls at most ${max} wagons`;
     if (consist.some(t => !WAGONS[t] || WAGONS[t].air || WAGONS[t].road || WAGONS[t].year > this.year)) return 'Wagon not available yet';
@@ -244,6 +253,7 @@ export class Game {
       const n = this.baseOf(tr).length;
       if (!consist.length) return 'Keep at least one wagon';
       if (consist.length > n) return `${tr.name} owns ${n} wagon${n > 1 ? 's' : ''}: buy more with Change wagons`;
+      if (consist.length > this.maxWagons(tr.loco, tr.orders)) return `${tr.loco.name} pulls at most ${this.maxWagons(tr.loco, tr.orders)} wagons`;
       if (consist.some(t => !WAGONS[t] || WAGONS[t].air || WAGONS[t].road || WAGONS[t].year > this.year)) return 'Wagon not available yet';
     }
     if (!tr.base) tr.base = this.baseOf(tr);
@@ -396,23 +406,27 @@ export class Game {
     return `${ind.name.split(' ')[0]} ${STATION_NAMES_SUFFIX[this.world.stations.length % STATION_NAMES_SUFFIX.length]}`.replace(/^(\w)/, c => c.toUpperCase());
   }
   // cov: the catchment recorded in a save (towns grow, so recomputing it on replay could differ)
-  buildStation(x, z, angle, cov = null) {
-    const err = this.world.stationCheck(x, z) || (this.net.stationClear(x, z, angle) ? null : 'The station would sit on existing track');
+  // len: the platform length (STATION_LENS: 64 standard, 128 long, 192 grand)
+  stationCost(len = ECON.platformLen) { return Math.round(ECON.stationCost * (STATION_LENS[len] ?? 1)); }
+  buildStation(x, z, angle, len = ECON.platformLen, cov = null) {
+    if (!STATION_LENS[len]) return 'No such platform length';
+    const err = this.world.stationCheck(x, z, len) || (this.net.stationClear(x, z, angle, len) ? null : 'The station would sit on existing track');
     if (err) return err;
-    if (!this.canAfford(ECON.stationCost)) return 'Not enough money';
-    const st = this.world.addStation(x, z, angle, this.stationName(x, z));
+    const cost = this.stationCost(len);
+    if (!this.canAfford(cost)) return 'Not enough money';
+    const st = this.world.addStation(x, z, angle, this.stationName(x, z), len);
     st.owner = this.co.id;
     if (cov) {
       const W = this.world;
       st.cov = { towns: cov.towns.map(id => W.towns.find(t => t.id === id)).filter(Boolean), inds: cov.inds.map(id => W.industries.find(i => i.id === id)).filter(Boolean) };
     } else st.cov.towns = st.cov.towns.filter(t => !this.rateWars.barred(t, this.co)); // a town lost in a rate war stays lost for a while
     this.net.stationTrack(st);
-    this.spend(ECON.stationCost, 'construction');
+    this.spend(cost, 'construction');
     for (const i of st.cov.inds) (i.stations ||= []).push(st);
     for (const t of st.cov.towns) (t.stations ||= []).push(st);
     this.rateWars.onStation(st);
     this.demand.set(st, {});
-    this.log({ t: 'station', x, z, angle, cov: { towns: st.cov.towns.map(t => t.id), inds: st.cov.inds.map(i => i.id) } });
+    this.log({ t: 'station', x, z, angle, ...(len !== ECON.platformLen ? { len } : {}), cov: { towns: st.cov.towns.map(t => t.id), inds: st.cov.inds.map(i => i.id) } });
     this.emit('news', `New station: <b>${st.name}</b>`);
     this.emit('changed');
     return st;
@@ -469,7 +483,7 @@ export class Game {
     this.log({ t: 'removeStation', id: st.id });
     this.world.removeStation(st); this.net.stationRemoved(st);
     this.demand.delete(st);
-    const back = Math.round(ECON.stationCost * 0.25 * this.infl());
+    const back = Math.round(this.stationCost(st.len) * 0.25 * this.infl());
     this.cash += back;
     this.emit('news', `Station ${st.name} taken down (${money(back)} salvage)`);
     this.emit('changed');
@@ -540,12 +554,22 @@ export class Game {
   repay() { return this.fin.repayBond(); }
 
   // ---------------- trains ----------------
-  availableLocos() { return LOCOS.filter(l => l.year <= this.year); }
+  // the most wagons a train of this locomotive may have: what it pulls, at most MAX_WAGONS. (A train longer than a
+  // platform it calls at is allowed: it is worked there in parts, so it stands longer, see handleStop.)
+  maxWagons(loco, orders) { return Math.min(loco.maxCars, MAX_WAGONS); }
+  // the locomotives on sale: from their first year to ten years after the last was built (never none: when all have
+  // gone, the newest stays)
+  availableLocos() {
+    const a = LOCOS.filter(l => l.year <= this.year && !(l.until && this.year > l.until + 10));
+    if (a.length) return a;
+    const b = LOCOS.filter(l => l.year <= this.year);
+    return b.length ? [b.reduce((x, l) => l.year > x.year ? l : x)] : a;
+  }
   buyTrain(locoId, consist, orders) {
-    const loco = LOCOS.find(l => l.id === locoId);
-    if (!loco || loco.year > this.year) return 'Locomotive not available';
+    const loco = this.availableLocos().find(l => l.id === locoId);
+    if (!loco) return 'Locomotive not available';
     if (!consist.length) return 'Add at least one wagon';
-    if (consist.length > Math.min(loco.maxCars, MAX_WAGONS)) return `This locomotive pulls at most ${Math.min(loco.maxCars, MAX_WAGONS)} wagons`;
+    if (consist.length > this.maxWagons(loco, orders)) return `${loco.name} pulls at most ${this.maxWagons(loco, orders)} wagons`;
     if (consist.some(t => !WAGONS[t] || WAGONS[t].year > this.year)) return 'Wagon type not available yet';
     if (orders.some(o => o.owner !== this.co.id)) return 'Trains can only stop at your own stations';
     if (orders.some(o => o.depot)) return 'Trains cannot stop at road depots';
@@ -589,6 +613,28 @@ export class Game {
     this.emit('news', `${tr.name} sold for ${money(v)}`);
     this.emit('changed');
   }
+  // ---- a new locomotive for a train: the old one is traded in (half its price today, less for its age), the train
+  // keeps its wagons, orders and load; its book value becomes the depreciated wagons plus the new locomotive's price
+  // and its age starts again (so selling it right after pays what a new train of the kind would)
+  locoTradeIn(tr) { return Math.round(this.locoCost(tr.loco) * 0.5 * Math.max(0.3, 1 - tr.ageDays / 365 / 30)); }
+  replaceLoco(tr, locoId) {
+    if (!this.mine(tr) || tr.type !== 'train') return 'Not your train';
+    const loco = this.availableLocos().find(l => l.id === locoId);
+    if (!loco) return 'Locomotive not available';
+    if (loco.id === tr.loco.id) return `${tr.name} already has this locomotive`;
+    const n = Math.max(tr.wagons.length, tr.base ? tr.base.length : 0, tr.newConsist ? tr.newConsist.length : 0), max = this.maxWagons(loco, tr.orders);
+    if (n > max) return `${loco.name} pulls at most ${max} wagons: ${tr.name} has ${n}`;
+    const tradeIn = this.locoTradeIn(tr), cost = this.locoCost(loco), net = cost - tradeIn;
+    if (net > 0 && !this.canAfford(net)) return 'Not enough money';
+    const owner = this.ownerOf(tr), old = tr.loco;
+    this.spend(net, 'vehicles', owner); // (a negative net: the trade-in was worth more, and is income)
+    tr.value = Math.max(0, Math.round(tr.value * Math.max(0.3, 1 - tr.ageDays / 365 / 30)) - 2 * tradeIn) + cost;
+    tr.loco = loco; tr.ageDays = 0;
+    this.view?.consistChanged?.(tr);
+    this.newsFor(owner, `🚂 ${tr.name} now runs behind a ${loco.name} (${old.name} traded in; ${net >= 0 ? 'cost' : 'refund'} ${money(Math.abs(net))})`);
+    this.emit('changed');
+    return null;
+  }
   dirAt(st, a, b) { // station axis signed to match direction a->b
     const s = Math.sign((b.x - a.x) * st.axis.x + (b.z - a.z) * st.axis.z) || 1;
     return st.axis.clone().multiplyScalar(s);
@@ -612,6 +658,12 @@ export class Game {
     else if (u.kind === 'throat') this.throats.set(u.key, tr);
     else { u.node.plats ||= PLAT_OFFS.map(() => new Set()); u.node.plats[u.plat].add(tr); }
   }
+  heldByOther(tr, u) {
+    if (u.kind === 'block') { const o = this.blocks.get(u.id); return !!o && [...o].some(x => x !== tr); }
+    if (u.kind === 'junction') return !!u.node.lock && u.node.lock !== tr;
+    if (u.kind === 'throat') { const o = this.throats.get(u.key); return !!o && o !== tr; }
+    return false;
+  }
   releaseUnit(tr, u) {
     u.released = true;
     // the same block/junction/platform may appear twice in one trip: keep it while a later use is pending
@@ -623,12 +675,12 @@ export class Game {
     else if (u.node.plats && u.plat != null) u.node.plats[u.plat].delete(tr);
   }
   buildUnits(tr) {
-    const net = this.net, from = tr.from;
-    const units = [{ kind: 'station', node: from, s: BACK, s0: BACK - HALF, s1: BACK + HALF, rel: BACK + HALF + 2, vec: this.platVec(from) }];
-    units.push(this.throatUnit(tr, from, BACK, true));
+    const net = this.net, from = tr.from, B = backFor(tr, from), H0 = halfOf(from);
+    const units = [{ kind: 'station', node: from, s: B, s0: B - H0, s1: B + H0, rel: B + H0 + 2, vec: this.platVec(from) }];
+    units.push(this.throatUnit(tr, from, B, true));
     tr.legRanges = [];
     const xunits = []; // level crossings on the way (locked separately: see crossLimit)
-    let s = BACK;
+    let s = B;
     tr.legs.forEach((lg, k) => {
       const e = lg.edge, f = lg.forward, s0 = s;
       const bounds = [0, ...e.signals, e.length], nb = bounds.length - 1;
@@ -646,11 +698,13 @@ export class Game {
       else {
         const final = k === tr.legs.length - 1;
         units.push(this.throatUnit(tr, node, s, false));
-        units.push({ kind: 'station', node, s, s0: s - HALF, s1: s + HALF, rel: final ? Infinity : s + HALF + 2, final, vec: this.platVec(node) });
+        const H = halfOf(node);
+        units.push({ kind: 'station', node, s, s0: s - H, s1: s + H, rel: final ? Infinity : s + H + 2, final, vec: this.platVec(node) });
         if (!final) units.push(this.throatUnit(tr, node, s, true));
       }
     });
-    for (let i = 0; i < units.length - 2; i++) if (units[i].kind === 'block' && units[i + 1].kind === 'throat' && units[i + 2].kind === 'station') units[i].rel = units[i + 2].s - HALF - 2;
+    for (let i = 0; i < units.length - 2; i++) if (units[i].kind === 'block' && units[i + 1].kind === 'throat' && units[i + 2].kind === 'station') units[i].rel = units[i + 2].s - halfOf(units[i + 2].node) - 2;
+    if (tr.tail) units.splice(1, 0, ...tr.tail); // (behind the start: see tailUnits)
     tr.units = units;
     tr.xunits = xunits.sort((a, b) => a.s - b.s);
   }
@@ -693,6 +747,15 @@ export class Game {
       else if (u.kind === 'throat') { const o = this.throats.get(u.key); if (o && o !== tr) return false; }
     }
     const last = chunk[chunk.length - 1];
+    // a train longer than the platform it stops at needs its way out too: not while another train stands in the switch
+    // area at the far end (two long trains would each hold the other's way out)
+    if (!force && last.kind === 'station' && overhangs(tr, last.node)) {
+      const arr = U[U.indexOf(last) - 1];
+      if (arr && arr.kind === 'throat') {
+        const o = this.throats.get(arr.key.endsWith(':-1') ? arr.key.slice(0, -3) + ':1' : arr.key.slice(0, -2) + ':-1');
+        if (o && o !== tr) return false;
+      }
+    }
     if (last.kind === 'station') {
       let p = this.freePlat(last.node, tr, false);
       if (p < 0 && (platForce || force)) { p = this.freePlat(last.node, tr, true); this.emit('news', `🚦 <b>${last.node.name}</b> is congested — ${tr.name} squeezes in. Build more stations or passing points.`); }
@@ -717,7 +780,7 @@ export class Game {
     return cap;
   }
   limitFor(tr, u) {
-    if (u.kind === 'station') return u.final ? tr.sStop : u.s + HALF - 2;
+    if (u.kind === 'station') return u.final ? tr.sStop : u.s + halfOf(u.node) - 2;
     if (u.kind === 'block') {
       // never wait inside a switch area: stop short of junctions and station throats
       const nx = tr.units[tr.units.indexOf(u) + 1];
@@ -732,10 +795,10 @@ export class Game {
     const a = new Vec3(), b = new Vec3();
     this.pointAt(tr, s - 4, a); this.pointAt(tr, s + 4, b);
     const dir = Math.sign((b.x - a.x) * st.axis.x + (b.z - a.z) * st.axis.z) || 1;
-    const Z = SWITCH_LEN * 1.6 + 10;
+    const Z = SWITCH_LEN * 1.6 + 10, H = halfOf(st);
     return out
-      ? { kind: 'throat', key: st.id + ':' + dir, s0: s + HALF - 2, s1: s + HALF + Z, rel: s + HALF + Z + 2 }
-      : { kind: 'throat', key: st.id + ':' + (-dir), s0: s - HALF - Z, s1: s - HALF, rel: s - HALF - 3 };
+      ? { kind: 'throat', key: st.id + ':' + dir, s0: s + H - 2, s1: s + H + Z, rel: s + H + Z + 2 }
+      : { kind: 'throat', key: st.id + ':' + (-dir), s0: s - H - Z, s1: s - H, rel: s - H - 3 };
   }
   releasePassed(tr) {
     const tail = tr.s - tr.len;
@@ -815,7 +878,8 @@ export class Game {
     }
     return this.setupLeg(tr, from, to, legs, tr.via);
   }
-  setupLeg(tr, from, to, legs, via) {
+  // loading: a moving train restored from a save (it takes back the reservations it held itself)
+  setupLeg(tr, from, to, legs, via, loading = false) {
     tr.via = via;
     if (tr.units) for (const u of tr.units) if (u.held && !u.released && !(u.kind === 'station' && u.node === from)) this.releaseUnit(tr, u);
     tr.legs = legs; tr.from = from; tr.to = to;
@@ -824,19 +888,48 @@ export class Game {
     const d0 = this.dirAt(from, core[0], core[Math.min(4, n - 1)]);
     const d1 = this.dirAt(to, core[Math.max(0, n - 5)], core[n - 1]);
     const pts = [];
-    for (let k = BACK; k > 0; k -= 3) pts.push(new Vec3(from.x, from.y, from.z).addScaledVector(d0, -k));
+    const B = backFor(tr, from), H0 = halfOf(from), H1 = halfOf(to);
+    for (let k = B; k > 0; k -= 3) pts.push(new Vec3(from.x, from.y, from.z).addScaledVector(d0, -k));
     pts.push(...core);
-    for (let k = 3; k <= HALF + 12; k += 3) pts.push(new Vec3(to.x, to.y, to.z).addScaledVector(d1, k));
+    for (let k = 3; k <= H1 + 12; k += 3) pts.push(new Vec3(to.x, to.y, to.z).addScaledVector(d1, k));
     const cum = [0];
     for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + pts[i].distanceTo(pts[i - 1]));
     tr.path = pts; tr.cum = cum; tr.dEnd = d1;
     const same = !tr.arrDir || tr.arrDir.dot(d0) > 0;
-    tr.s = BACK + (same ? HALF - 1 : tr.len - (HALF - 1));
-    tr.sStop = BACK + legs.reduce((a, l) => a + l.edge.length, 0) + HALF - 1;
+    tr.s = B + (same ? H0 - 1 : tr.len - (H0 - 1));
+    tr.sStop = B + legs.reduce((a, l) => a + l.edge.length, 0) + H1 - 1;
+    const long = overhangs(tr, from);
+    tr.tail = long && same ? this.tailUnits(tr, from, legs, B) : null;
     this.buildUnits(tr);
     const u0 = tr.units[0]; u0.held = true; u0.released = false; u0.plat = tr.curPlat ?? 0;
     tr.next = 1; tr.limit = tr.s; tr.wait = 0;
+    if (long && !loading) {
+      // longer than the platform: it holds what its tail (behind it) or its head (ahead, after reversing) stands on;
+      // when another train holds any of it, it waits for it with the rest of its way (tryReserve, from next = 1)
+      const U = tr.units; let i = 1;
+      if (same) i = 1 + tr.tail.length;
+      else while (i < U.length && U[i].kind !== 'station' && U[i].s0 < tr.s) i++;
+      if (!U.slice(1, i).some(u => this.heldByOther(tr, u))) {
+        for (let k = 1; k < i; k++) this.acquireUnit(tr, U[k]);
+        tr.next = i;
+        // (what its head holds ends a stretch it may run on, a block behind a signal: it may run to its end)
+        if (!same && i > 1 && U[i - 1].kind === 'block' && U[i - 1].safe) tr.limit = Math.max(tr.s, this.limitFor(tr, U[i - 1]));
+      }
+    }
     return true;
+  }
+  // what the tail of a train longer than its platform stands on behind it: the station's switch area on that side
+  // and, when it reaches past the switches, the first block of each track on that side (it may have come by any)
+  tailUnits(tr, from, legs, B) {
+    const H0 = halfOf(from), Z = SWITCH_LEN * 1.6 + 10, units = [this.throatUnit(tr, from, B, false)];
+    if (tr.len - (2 * H0 - 1) <= Z) return units;
+    const l0 = legs[0], exit = l0.forward ? l0.edge.sideA : l0.edge.sideB;
+    for (const e of from.edges) {
+      const atA = e.a === from, dir = atA ? -1 : 1;
+      if ((atA ? e.sideA : e.sideB) === exit) continue;
+      units.push({ kind: 'block', id: this.net.blockId(e, atA ? 0 : e.signals.length, dir), dir, s0: 0, s1: B - H0 - Z, rel: B - H0 - 2, safe: false });
+    }
+    return units;
   }
   pointAt(tr, s, out) {
     const cum = tr.cum, p = tr.path;
@@ -851,7 +944,7 @@ export class Game {
     out.set(0, 0, 0);
     for (const u of tr.units) if (u.kind === 'station' && u.plat) {
       const d = Math.abs(s - u.s), sw = SWITCH_LEN * (u.plat === 2 ? 1.6 : 1);
-      const w = d <= HALF ? 1 : smoothstep(HALF + sw, HALF, d);
+      const H = halfOf(u.node), w = d <= H ? 1 : smoothstep(H + sw, H, d);
       if (w > 0) out.addScaledVector(u.vec, w * PLAT_OFFS[u.plat]);
     }
     for (const r of tr.legRanges) if (r.edge.double && s > r.s0 && s < r.s1) {
@@ -892,7 +985,7 @@ export class Game {
     const W = this.world, r3 = (v) => Math.round(v * 1000) / 1000;
     return {
       ...(RULES.name !== 'classic' ? { rules: RULES.name } : {}), // (saves without it are classic)
-      v: this.net.legacy ? 3 : (this.roads.edges.length || this.truckSeq > 1 || this.world.stations.some(s => s.depot) ? SAVE_VERSION : 4), seeds: { terrain: this.world.terrain.seed, world: this.world.seed, map: this.world.terrain.map, gen: MAP_GEN, ...(this.world.terrain.kind === 'continent' ? { kind: 'continent' } : {}) }, savedAt: Date.now(), view,
+      v: this.net.legacy ? 3 : (this.roads.edges.length || this.truckSeq > 1 || this.world.stations.some(s => s.depot) ? SAVE_VERSION : 4), seeds: { terrain: this.world.terrain.seed, world: this.world.seed, map: this.world.terrain.map, gen: this.world.terrain.gen || MAP_GEN, ...(this.world.terrain.kind === 'continent' ? { kind: 'continent' } : {}) }, savedAt: Date.now(), view,
       meta: { map: this.world.terrain.map, date: this.dateStr(), value: Math.round(this.companyValue(this.player)), cash: Math.round(this.player.cash), trains: this.vehiclesOf(this.player).filter(v => v.type !== 'truck').length, stations: this.stationsOf(this.player).length },
       day: this.day, lastMonth: this.lastMonth, lastYear: this.lastYear, medals: this.medals, trainSeq: this.trainSeq, shipSeq: this.shipSeq, planeSeq: this.planeSeq,
       quarter: this.quarter,
@@ -933,6 +1026,7 @@ export class Game {
         ...(t.xlocks?.length ? { xl: t.xlocks.map(D => D.id) } : {}),
         handedOver: t.handedOver || 0, ageDays: t.ageDays, revenueYear: t.revenueYear, revenueLast: t.revenueLast, lifetime: t.lifetime, trips: t.trips,
       })),
+      ...(FEATURES.ships || FEATURES.planes || FEATURES.roads ? { dlc: true } : {}), // (a game with the expansion on: loading turns it on)
     };
   }
   replay(a) {
@@ -944,7 +1038,7 @@ export class Game {
     const edge = (id) => net.edges.find(e => e.id === id);
     const rnode = (r) => r.s ? W.stations.find(s => s.id === r.s) : { type: 'rjc', p: P(r.p), bad: null };
     let r = null;
-    if (a.t === 'station') r = this.buildStation(a.x, a.z, a.angle, a.cov);
+    if (a.t === 'station') r = this.buildStation(a.x, a.z, a.angle, a.len || ECON.platformLen, a.cov);
     else if (a.t === 'track') {
       const pts = a.pts.map(P);
       r = this.buildTrack({ pts, bridge: a.bridge, cost: a.cost, maxGrade: a.maxGrade, sideA: a.sideA, sideB: a.sideB, double: a.double, grant: a.grant || 0, a: node(a.a), b: node(a.b), bad: null });
@@ -1063,7 +1157,7 @@ export class Game {
     tr.at.plats[tr.curPlat].add(tr);
     const legs = d.legs && d.legs.map(([id, f]) => ({ edge: this.net.edges.find(e => e.id === id), forward: f }));
     if (d.state === 'moving' && legs && legs.every(l => l.edge) && st(d.to)) {
-      this.setupLeg(tr, tr.at, st(d.to), legs, d.via);
+      this.setupLeg(tr, tr.at, st(d.to), legs, d.via, true);
       if (d.plats) tr.units.forEach((u, k) => { if (u.kind === 'station' && d.plats[k] != null) u.plat = d.plats[k]; });
       Object.assign(tr, { state: 'moving', s: d.s, speed: d.speed, wait: d.wait, waiting: d.waiting, limit: d.limit, dwell: d.dwell ?? tr.dwell });
       if (d.next != null && d.next <= tr.units.length) {
@@ -1520,6 +1614,7 @@ export class Game {
     tr.state = 'loading'; tr.dwell = tr.type === 'plane' ? 1 + moved * 0.2 : tr.type === 'truck' ? 0.5 + moved * 0.1 : (tr.type === 'ship' ? 2 : 1.2) + moved * (tr.type === 'ship' ? 0.15 : 0.25);
     if (swapped) tr.dwell += swapped * 0.15; // (shunting in the yard)
     if (tr.type === 'train' && this.auctions.has('telegraph')) tr.dwell *= 0.85;
+    if (tr.type === 'train' && overhangs(tr, st)) tr.dwell *= Math.ceil(tr.len / (2 * halfOf(st))); // (longer than the platform: worked in parts)
     if (earned > 0) { this.emit('float', this.vehiclePos(tr), '+' + money(earned)); tr.trips++; }
     if (transferred > 0) this.emit('float', this.vehiclePos(tr), `📦 ${Math.round(transferred)} stored`);
   }

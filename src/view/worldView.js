@@ -149,7 +149,7 @@ export class WorldView {
   }
   stationAdded(st) {
     if (st.mesh) return;
-    const mesh = new THREE.Mesh(st.depot ? depotModel() : stationModel(), vertexMat);
+    const mesh = new THREE.Mesh(st.depot ? depotModel() : stationModel(st.len), vertexMat);
     mesh.position.set(st.x, st.y, st.z); mesh.rotation.y = -st.angle;
     mesh.castShadow = true; mesh.receiveShadow = true;
     st.mesh = this.add(mesh, st);

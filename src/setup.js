@@ -5,14 +5,20 @@ import { World } from './world.js';
 import { TrackNetwork } from './track.js';
 import { Game } from './sim.js';
 import { Waterways } from './ships.js';
-import { mapSeeds } from './util.js';
-import { useRules } from './data.js';
+import { mapSeeds, MAP_GEN } from './util.js';
+import { setLegacyMath } from './dmath.js';
+import { useRules, FEATURES } from './data.js';
 
 // seeds: from mapSeeds(map number), or a save's `seeds`
 // rules: 'continental' (new games) or 'classic' (saves from before it)
+// seeds.gen: the map generator (a save's; new games the current one). Generator 1 games use the engine's own
+// Math.sin / cos / pow, as their saves were made with (src/dmath.js).
 export function createGame(seeds = mapSeeds(0), rules = 'continental') {
   useRules(rules);
+  const gen = seeds.gen || MAP_GEN;
+  setLegacyMath(gen < 2);
   const terrain = new Terrain(seeds.terrain, seeds.map || 0, seeds.kind || 'classic');
+  terrain.gen = gen;
   const world = new World(terrain, seeds.world);
   const net = new TrackNetwork(terrain, world);
   const game = new Game(world, net);
@@ -39,7 +45,9 @@ export function newGame(game, { rivals = 2, difficulty = 'normal', seed = 0, per
 
 // a game from a save (as made by game.serialize)
 export function loadGame(save) {
-  const seeds = save.seeds?.map || save.seeds?.kind ? { ...save.seeds, map: save.seeds.map || 0 } : mapSeeds(0);
+  // a save made with the expansion on turns it on (unless some of it is on already: the page's ?dlc=1, or a test)
+  if (save.dlc && !FEATURES.ships && !FEATURES.planes && !FEATURES.roads) Object.assign(FEATURES, { ships: true, planes: true, roads: true });
+  const seeds = { ...(save.seeds?.map || save.seeds?.kind ? { ...save.seeds, map: save.seeds.map || 0 } : mapSeeds(0)), gen: save.seeds?.gen || 1 };
   const g = createGame(seeds, save.rules || 'classic');
   generateMap(g);
   g.game.load(save);

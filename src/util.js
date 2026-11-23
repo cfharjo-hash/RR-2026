@@ -4,7 +4,10 @@
 // Saves on generated maps rebuild the map from these seeds, so the generator for maps 1+ must not change
 // (seeds, riverFor, TOWN_POOL order, the siting rules in World.generate). If it ever has to, bump MAP_GEN:
 // saves record it, and a save from another generator version is refused instead of replaying on the wrong map.
-export const MAP_GEN = 1;
+// Generator 2 (2026-11-23): the sim's sin, cos and pow are its own (src/dmath.js), the same in every browser and in
+// the C# port. Saves from generator 1 still load: they replay with the engine's Math functions (setup.js).
+export const MAP_GEN = 2;
+export const MAP_GENS = [1, 2]; // generators a save may come from
 export const MAP_MAX = 99999;
 export function mapSeeds(map) {
   map = Math.max(0, Math.min(MAP_MAX, Math.floor(+map || 0)));

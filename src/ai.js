@@ -5,7 +5,8 @@
 // output is lost, buy well-served industries, and build the best new route it can afford
 // (town↔town passengers, producer → consumer freight, river ships), ranked by yearly revenue
 // per dollar invested. A personality changes how aggressive it is.
-import { CARGO, ECON, SHIPS, TOWN_ACCEPTS, LEVEL_MUL, FEATURES } from './data.js';
+import { sin as dsin, cos as dcos } from './dmath.js';
+import { CARGO, ECON, SHIPS, TOWN_ACCEPTS, LEVEL_MUL, FEATURES, WAGONS, RULES } from './data.js';
 import { FIN } from './finance.js';
 import { clamp } from './util.js';
 
@@ -67,7 +68,7 @@ export class CompanyAI {
   }
 
   // ---------- helpers ----------
-  bestLoco() { return this.g.availableLocos().sort((a, b) => b.power * b.speed - a.power * a.speed)[0]; }
+  bestLoco() { const all = this.g.availableLocos(), L = all.filter(l => l.role !== 'passenger'); return (L.length ? L : all).sort((a, b) => b.power * b.speed - a.power * a.speed)[0]; }
   own(s) { return s.owner === this.c.id; }
   stationFor(target, toward) {
     const g = this.g, world = g.world;
@@ -75,7 +76,7 @@ export class CompanyAI {
     if (existing) return existing;
     for (let r = 60; r < 175; r += 10) for (let k = 0; k < 24; k++) {
       const ang = Math.atan2(toward.z - target.z, toward.x - target.x) + (k % 2 ? 1 : -1) * Math.floor(k / 2) * 0.26;
-      const x = target.x + Math.cos(ang) * r, z = target.z + Math.sin(ang) * r;
+      const x = target.x + dcos(ang) * r, z = target.z + dsin(ang) * r;
       if (world.stationCheck(x, z) || !g.net.stationClear(x, z, Math.atan2(toward.z - z, toward.x - x))) continue;
       if (!covers({ cov: world.coverage(x, z) }, target)) continue;
       return { planned: true, x, z, angle: Math.atan2(toward.z - z, toward.x - x) };
@@ -110,7 +111,7 @@ export class CompanyAI {
     }
     let res = null;
     for (let r = 40; r < 200 && !res; r += 10) for (let k = 0; k < 36; k++) {
-      const a = k / 36 * Math.PI * 2, x = target.x + Math.cos(a) * r, z = target.z + Math.sin(a) * r;
+      const a = k / 36 * Math.PI * 2, x = target.x + dcos(a) * r, z = target.z + dsin(a) * r;
       if (world.stationCheck(x, z)) continue;
       if (!covers({ cov: world.coverage(x, z) }, target)) continue;
       const w = g.water.nearestWater(x, z, ECON.harborReach); if (!w) continue;
@@ -515,7 +516,54 @@ export class CompanyAI {
   }
 
   // one quarter's decisions (acting for this company)
-  tick(q) { this.g.as(this.c, () => { this.finances(); this.auctions(); this.invest(q); this.raceStep(q); this.market(); }); }
+  tick(q) { this.g.as(this.c, () => { this.finances(); this.auctions(); this.invest(q); this.renew(q); this.raceStep(q); this.market(); }); }
+
+  // ---------- fleet renewal ----------
+  // Once a year (the quarter with q % 4 === 0) it looks at its trains in the order they were bought and gives up to
+  // max(3, a tenth of its fleet) of them a new locomotive: the best it would buy (as bestLoco) that pulls the train's
+  // wagons, when the old one is no longer sold (and the new one is no weaker) or the new one is at least 1.5× as
+  // strong (power × speed). With it the train's wagons are modernised (modernWagons, changed at its next stop).
+  // Only with cash to spare: more than 4× the net cost (locomotive and wagons) plus 200,000 (in today's money);
+  // with less, the locomotive alone when that is affordable.
+  renew(q) {
+    if (q % 4 !== 0 || RULES.name === 'classic') return; // (classic rules: the game as it was)
+    const g = this.g, I = g.infl(), all = g.availableLocos(), L0 = all.filter(l => l.role !== 'passenger');
+    const L = (L0.length ? L0 : all).slice().sort((a, b) => b.power * b.speed - a.power * a.speed), ps = (l) => l.power * l.speed;
+    const own = g.trains.filter(t => t.owner === this.c.id && t.type === 'train'), cap = Math.max(3, Math.ceil(own.length / 10));
+    let n = 0, pending = 0; // (pending: what the wagons ordered this year will cost at their next stops)
+    for (const tr of own) {
+      if (n >= cap) break;
+      const need = Math.max(tr.wagons.length, tr.base ? tr.base.length : 0, tr.newConsist ? tr.newConsist.length : 0);
+      const best = L.find(l => g.maxWagons(l, tr.orders) >= need), cur = tr.loco;
+      if (!best || best.id === cur.id) continue;
+      const sold = all.some(l => l.id === cur.id);
+      if (sold ? ps(best) < 1.5 * ps(cur) : ps(best) < ps(cur)) continue;
+      const net = g.locoCost(best) - g.locoTradeIn(tr), wagons = this.modernWagons(tr), wnet = wagons ? g.consistCost(tr, wagons).net : 0;
+      const cash = g.cash - pending, both = wagons && cash > 4 * (net + wnet) + 200000 * I;
+      if (!both && !(cash > 4 * net + 200000 * I)) continue;
+      if (g.replaceLoco(tr, best.id)) continue;
+      n++; this.log(`${g.year}: ${tr.name}: new ${best.name} for its ${cur.name} (net ${Math.round(net)})`);
+      if (both && !g.setConsist(tr, wagons)) { pending += wnet; this.log(`${g.year}: ${tr.name}: modern wagons ${wagons.join(', ')} (net ${Math.round(wnet)})`); } // (refused: it keeps its wagons)
+    }
+  }
+  // the train's wagons with each one that has a better car on sale replaced by it: of the cars like its base type
+  // (the type itself, or what an era car is `like`), the one with the highest capacity factor (`mult`, 1 for a base
+  // type) above its own (the first of equals in WAGONS order). A type of which a wagon carries cargo stays (that load
+  // would be lost with it). null: nothing to change, or a pending change or a per-stop plan (those keep their wagons).
+  modernWagons(tr) {
+    if (tr.newConsist || tr.plan) return null;
+    const avail = this.g.wagonsAvailable(), mult = (t) => WAGONS[t].mult || 1;
+    let changed = false;
+    const out = this.g.baseOf(tr).map(t => {
+      if (tr.wagons.some(w => w.type === t && w.cargo)) return t;
+      const base = WAGONS[t].like || t;
+      let best = t;
+      for (const k of avail) if (WAGONS[k].like === base && mult(k) > mult(best)) best = k;
+      if (best !== t) changed = true;
+      return best;
+    });
+    return changed ? out : null;
+  }
 
   // ---------- the race west (phase 4) ----------
   // A personality with `race` pushes a trunk line west from its Atlantic network, a town at a time, while the Golden

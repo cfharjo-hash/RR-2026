@@ -69,7 +69,7 @@ export class UI {
     document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === m));
     $('#orders').classList.toggle('hide', m !== 'train');
     const hints = {
-      select: '', station: 'Station: click to place · <b>Q</b>/<b>E</b> rotate · yellow ring = catchment',
+      select: '', station: `Station: click to place · <b>Q</b>/<b>E</b> rotate · <b>L</b> platform: <b>${{ 64: 'standard', 128: 'long', 192: 'grand' }[this.api.tool.len]} ${this.api.tool.len} m</b> · yellow ring = catchment`,
       track: `${this.api.tool.double ? '<b>DOUBLE</b>' : '<b>SINGLE</b>'} track (G to switch) · max grade <button class="gr" data-gr="-1" title="Flatter (−)">−</button><b>${+(this.api.tool.grade * 100).toFixed(1)}%</b><button class="gr" data-gr="1" title="Steeper (+)">+</button> <small>(flatter: faster loaded trains, more bridges and cuttings)</small><br>Click a station or a track (junction), click points (they snap; Shift: free), click a station or a track · <b>right-click</b> steps back to Inspect · to double an existing line, click it with Inspect`,
       signal: 'Signal: click a track to split it into blocks — most useful on double track · a fast train needs long blocks to stop in',
       road: 'Road: click one of your stations or depots (or a road), click points (they snap; Shift: free), click a stop or a road · roads are public · <b>right-click</b> undo · <b>Esc</b> cancel',
@@ -192,11 +192,11 @@ export class UI {
     t.innerHTML = html; t.classList.remove('hide');
     t.style.left = Math.min(innerWidth - 300, x + 18) + 'px'; t.style.top = (y + 18) + 'px';
   }
-  stationTooltip(p, err, x, y) {
+  stationTooltip(p, err, x, y, len = ECON.platformLen) {
     const cov = this.world.coverage(p.x, p.z);
     const fake = { cov };
     const sup = [...this.world.supplies(fake)], acc = [...this.world.accepts(fake)];
-    let h = err ? `<span class="bad">${err}</span><br>` : `New station · <b>${money(ECON.stationCost)}</b><br>`;
+    let h = err ? `<span class="bad">${err}</span><br>` : `New station · ${len} m platform · <b>${money(this.game.stationCost(len))}</b><br>`;
     const names = [...cov.towns.map(t => '🏘 ' + t.name), ...cov.inds.map(i => '🏭 ' + i.name)];
     h += names.length ? `<small>${names.join(' · ')}</small>` : '<small>Nothing in catchment</small>';
     if (sup.length) h += `<div class="tt-row"><small>Supplies</small> ${sup.map(c => chip(c)).join('')}</div>`;
@@ -507,7 +507,7 @@ export class UI {
     this.selected = o;
     if (!o) { p.classList.add('hide'); return; }
     // don't rebuild while the pointer is on a button (keeps clicks reliable)
-    if (refresh && p.matches(':hover') && p.querySelector('button:hover')) return;
+    if (refresh && ((p.matches(':hover') && p.querySelector('button:hover')) || p.querySelector('select:focus'))) return; // (not while a button or a list is in use)
     p.classList.remove('hide');
     let h = '';
     const g = this.game, W = this.world;
@@ -602,6 +602,10 @@ export class UI {
       h += `<h4>Route</h4><ol class="route">${o.orders.map((s, i) => `<li class="${i === o.idx ? 'cur' : ''}">${s.name}${s.warehouse ? ' 📦' : ''}${o.plan?.[i] ? ` <span class="sub">🔀 leaves with ${this.consistText(o.plan[i].slice(0, this.game.baseOf(o).length))}</span>` : ''}</li>`).join('')}</ol>`;
       h += `<p>Revenue this year <b>${money(o.revenueYear)}</b> · last year ${money(o.revenueLast)} · profit <b class="${o.revenueYear - (o.ln?.cy || 0) >= 0 ? 'ok' : 'bad'}">${money(o.revenueYear - (o.ln?.cy || 0))}</b><br>Lifetime ${money(o.lifetime)} · upkeep ${money(o.loco.upkeep)}/yr${o.handedOver ? `<br><span class="sub">📦 ${Math.round(o.handedOver).toLocaleString()} units handed to warehouses (paid to the train that delivers them)</span>` : ''}</p>`;
       h += `<div class="btns"><button id="b-follow">📷 Follow</button>${foreign ? '' : '<button id="b-lines">📋 Line manager</button><button id="b-cmix">🔧 Change wagons</button><button id="b-sell" class="danger">Sell</button>'}</div>`;
+      if (!foreign) { // a new locomotive: each one on sale, with what it costs after the old one is traded in
+        const ti = g.locoTradeIn(o), opts = g.availableLocos().filter(l => l.id !== o.loco.id).map(l => { const net = g.locoCost(l) - ti; return `<option value="${l.id}">${l.name} · ${l.speed} mph · ${net >= 0 ? money(net) : `refund ${money(-net)}`}</option>`; }).join('');
+        if (opts) h += `<h4>Replace locomotive</h4><p class="sub">The ${o.loco.name} is traded in for ${money(ti)}.</p><div class="btns"><select id="s-loco">${opts}</select><button id="b-loco">🚂 Replace</button></div>`;
+      }
     } else if (o.type === 'plane') {
       const p = o.path, phase = o.state !== 'moving' ? '' : o.s < p.sTaxi ? 'taxiing' : o.s < p.sAir ? 'taking off' : o.s < p.sLand ? (p.sLand - o.s < 450 ? 'on approach' : 'cruising') : 'landing';
       const st = o.state === 'moving' ? `${phase[0].toUpperCase() + phase.slice(1)} → <b>${o.to.name}</b> · ${Math.round(o.speed / 0.5)} mph` : o.state === 'stuck' ? '<span class="bad">No airfield!</span>' : `At <b>${o.orders[o.idx].name}</b> · boarding`;
@@ -642,8 +646,10 @@ export class UI {
         h += why ? `<p class="sub">Can’t be doubled here: ${why}.</p>` : `<div class="btns"><button id="b-double" class="primary">Upgrade to double track · ${money(this.game.doubleCost(o))}</button></div><p class="sub">Trains in each direction get their own line. Add signals (N) so several can follow each other.</p>`;
       }
     }
+    const locoSel = p.dataset.key === o.id ? p.querySelector('#s-loco')?.value : null; // (the locomotive picked stays picked)
     p.dataset.key = o.id;
     p.innerHTML = `<button class="x" id="insp-x">×</button>` + h;
+    if (locoSel && p.querySelector(`#s-loco option[value="${locoSel}"]`)) p.querySelector('#s-loco').value = locoSel;
     $('#insp-x').onclick = () => this.inspect(null);
     p.querySelectorAll('[data-sel]').forEach(a => a.onclick = () => {
       const t = [...W.towns, ...W.industries].find(x => x.id === a.dataset.sel);
@@ -656,6 +662,7 @@ export class UI {
     on('b-cmixx', () => { this.game.setConsist(o, this.game.baseOf(o)); this.inspect(o, true); });
     on('b-lines', () => { this.lineSel = o.id; this.openTrains(); });
     on('b-sell', () => { this.game.sellTrain(o); this.inspect(null); });
+    act('b-loco', () => g.replaceLoco(o, p.querySelector('#s-loco').value));
     act('b-wh', () => g.buildWarehouse(o));
     act('b-double', () => g.doubleTrack(o));
     on('b-rmst', () => { if (!confirm(`Take down ${o.name} and your track that ends there?`)) return; const e = this.game.removeStation(o); if (e) this.toast(e, true); else this.inspect(null); });
@@ -729,7 +736,7 @@ export class UI {
     const m = this.modal('Buy a train', `
       <div class="buy-grid">
         <div><h4>Locomotive</h4><div class="locos">${locos.map((l, i) => `<label class="loco-card"><input type="radio" name="loco" value="${l.id}" ${i === 0 ? 'checked' : ''}>
-          <div><b>${l.name}</b><small>${l.speed} mph · pulls ~${Math.round(l.power * 250)} t well · max ${Math.min(l.maxCars, 6)} wagons<br>${money(g.locoCost(l))} · upkeep ${money(l.upkeep)}/yr</small></div>
+          <div><b>${l.name}</b><small>${l.speed} mph · pulls ~${Math.round(l.power * 250)} t well · max ${Math.min(l.maxCars, 16)} wagons (6 fit a standard platform; a longer train is slower at its stops)<br>${money(g.locoCost(l))} · upkeep ${money(l.upkeep)}/yr</small></div>
           <i style="background:${l.color};border-color:${l.trim}"></i></label>`).join('')}
           ${LOCOS.filter(l => l.year > g.year).map(l => `<div class="loco-card locked"><div><b>${l.name}</b><small>available ${l.year}</small></div></div>`).join('')}</div></div>
         <div><h4>Wagons</h4><table class="mini wagons">${Object.entries(WAGONS).filter(([, w]) => !w.air && !w.road).map(([k, w]) => avail.includes(k)
@@ -741,7 +748,7 @@ export class UI {
     const loco = () => LOCOS.find(x => x.id === m.querySelector('input[name=loco]:checked').value);
     const total = () => Object.values(counts).reduce((a, b) => a + b, 0);
     const upd = () => {
-      const l = loco(), max = Math.min(l.maxCars, 6);
+      const l = loco(), max = Math.min(l.maxCars, 16); // (more than fit a platform: allowed, the train is worked there in parts)
       for (const k of Object.keys(counts)) { const e = $('#wc-' + k); if (e) e.textContent = counts[k]; }
       const consist = Object.entries(counts).flatMap(([k, n]) => Array(n).fill(k));
       const cost = g.locoCost(l) + consist.reduce((s, t) => s + g.wagonCost(t), 0);
@@ -749,8 +756,8 @@ export class UI {
       const full = empty + consist.reduce((s, t) => s + Math.max(0, ...carries(t).map(c => CARGO[c].cap[t] * CARGO[c].wt)), 0);
       $('#buy-sum').innerHTML = `${total()}/${max} wagons · <b>${money(cost)}</b> · weight ${Math.round(empty)}–${Math.round(full)} t ${full > l.power * 250 * 1.1 ? '<span class="warn">(heavy for this locomotive — slow on hills)</span>' : ''}`;
     };
-    m.querySelectorAll('input[name=loco]').forEach(i => i.oninput = () => { const max = Math.min(loco().maxCars, 6); while (total() > max) { const k = Object.keys(counts).reverse().find(k => counts[k]); counts[k]--; } upd(); });
-    m.querySelectorAll('[data-inc]').forEach(b => b.onclick = () => { if (total() < Math.min(loco().maxCars, 6)) counts[b.dataset.inc]++; upd(); });
+    m.querySelectorAll('input[name=loco]').forEach(i => i.oninput = () => { const max = Math.min(loco().maxCars, 16); while (total() > max) { const k = Object.keys(counts).reverse().find(k => counts[k]); counts[k]--; } upd(); });
+    m.querySelectorAll('[data-inc]').forEach(b => b.onclick = () => { if (total() < Math.min(loco().maxCars, 16)) counts[b.dataset.inc]++; upd(); });
     m.querySelectorAll('[data-dec]').forEach(b => b.onclick = () => { if (counts[b.dataset.dec] > 0) counts[b.dataset.dec]--; upd(); });
     upd();
     $('#b-route').onclick = () => {
@@ -765,7 +772,7 @@ export class UI {
   // (with `stop`: the set the train leaves that stop with, swapped for free in the yard; from the line manager)
   openConsist(tr, stop = null) {
     const g = this.game, W = this.world, avail = g.wagonsAvailable().filter(k => !WAGONS[k].air && !WAGONS[k].road);
-    const yard = stop !== null, ST = yard ? tr.orders[stop] : null, max = yard ? g.baseOf(tr).length : Math.min(tr.loco.maxCars, 6);
+    const yard = stop !== null, ST = yard ? tr.orders[stop] : null, max = yard ? g.baseOf(tr).length : g.maxWagons(tr.loco, tr.orders);
     const carries = (t) => Object.keys(CARGO).filter(c => CARGO[c].cap[t] && (!CARGO[c].year || CARGO[c].year <= g.year));
     const counts = Object.fromEntries(avail.map(k => [k, 0]));
     for (const t of (yard ? tr.plan?.[stop] : tr.newConsist) || g.baseOf(tr)) if (counts[t] !== undefined) counts[t]++;

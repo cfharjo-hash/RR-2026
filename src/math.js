@@ -2,6 +2,7 @@
 // planning uses. Both follow Three.js r160 (MIT licence) operation for operation, so every number matches what
 // the game computed with Three.js before (tools/math-check.mjs verifies this bit for bit). Saves replay
 // construction, so any change here would change rebuilt maps.
+import { pow as dpow } from './dmath.js';
 
 export class Vec3 {
   constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
@@ -56,7 +57,7 @@ export class CatmullRom {
     const p1 = points[intPoint % l], p2 = points[(intPoint + 1) % l];
     // as in Three.js, both extrapolated ends share one temp vector: on a 2-point curve p3 overwrites p0
     const p3 = intPoint + 2 < l ? points[(intPoint + 2) % l] : tmp.subVectors(points[l - 1], points[l - 2]).add(points[l - 1]);
-    let dt0 = Math.pow(p0.distanceToSquared(p1), 0.25), dt1 = Math.pow(p1.distanceToSquared(p2), 0.25), dt2 = Math.pow(p2.distanceToSquared(p3), 0.25);
+    let dt0 = dpow(p0.distanceToSquared(p1), 0.25), dt1 = dpow(p1.distanceToSquared(p2), 0.25), dt2 = dpow(p2.distanceToSquared(p3), 0.25);
     if (dt1 < 1e-4) dt1 = 1.0;
     if (dt0 < 1e-4) dt0 = dt1;
     if (dt2 < 1e-4) dt2 = dt1;

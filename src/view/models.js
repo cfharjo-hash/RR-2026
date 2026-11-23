@@ -139,13 +139,12 @@ export function industryModel(def, rand) {
 }
 
 // ---------------- station ----------------
-export function stationModel() {
-  const L = ECON.platformLen;
+export function stationModel(L = ECON.platformLen) {
   const b = new PartBuilder();
   b.box(L + 8, 0.5, 52, '#7a7262', 0, -0.4, -3);
   b.box(L, 1.1, 5, '#a59c8a', 0, 0, 4.6);
   b.box(L - 4, 1.1, 3.6, '#a59c8a', 0, 0, -4.6);
-  for (let s = -20; s <= 20; s += 10) b.box(0.25, 3.4, 0.25, '#3a3a3a', s, 1.1, -4.6);
+  for (let s = -20; s <= 20; s += 10) b.box(0.25, 3.4, 0.25, '#3a3a3a', s, 1.1, -4.6); // (the canopies stay the standard size)
   b.box(44, 0.25, 3.2, '#5a4a3c', 0, 4.5, -4.6);
   b.box(18, 7, 8, '#c8b48e', 0, 0, 12).roof(8, 4, 18, '#5b3a2e', 0, 7, 12, PI / 2);
   b.box(6, 5, 6, '#b8a07e', -14, 0, 12).roof(6, 3, 6, '#5b3a2e', -14, 5, 12, PI / 2);

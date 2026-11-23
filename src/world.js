@@ -1,5 +1,6 @@
 // The map's towns, industries and stations (pure data and rules; drawn by view/worldView.js).
 // Changes the view must show go through `this.view` (null when the game runs headless).
+import { sin as dsin, cos as dcos } from './dmath.js';
 import { INDUSTRY, TOWN_NAMES, TOWN_POOL, CARGO, ECON, TOWN_ACCEPTS } from './data.js';
 import { mulberry32, smoothstep, clamp } from './util.js';
 import { Vec3 } from './math.js';
@@ -215,7 +216,7 @@ export class World {
   }
   layoutTown(town, r = this.rand, blocked = null) {
     const t = this.terrain;
-    const ca = Math.cos(town.angle), sa = Math.sin(town.angle);
+    const ca = dcos(town.angle), sa = dsin(town.angle);
     const lots = [];
     const sp = 15;
     for (let u = -16; u <= 16; u++) for (let v = -16; v <= 16; v++) {
@@ -264,12 +265,14 @@ export class World {
   }
 
   // ---------- stations ----------
-  stationCheck(x, z) {
+  // len: the platform length (ECON.platformLen, or a long station's). Stations keep apart by at least 90 m, and long
+  // ones far enough that their platforms and switches don't meet
+  stationCheck(x, z, len = ECON.platformLen) {
     const t = this.terrain;
-    if (!t.inBounds(x, z, 60)) return 'Too close to map edge';
+    if (!t.inBounds(x, z, 60 + (len - ECON.platformLen) / 2)) return 'Too close to map edge';
     if (t.heightAt(x, z) < 1.5) return 'Cannot build on water';
     if (t.slopeAt(x, z, 25) > 0.22) return 'Terrain too steep';
-    for (const s of this.stations) if (Math.hypot(s.x - x, s.z - z) < (s.depot ? 50 : 90)) return 'Too close to another station';
+    for (const s of this.stations) if (Math.hypot(s.x - x, s.z - z) < (s.depot ? 50 : Math.max(90, (s.len || ECON.platformLen) / 2 + len / 2 + 26))) return 'Too close to another station';
     for (const i of this.industries) if (Math.hypot(i.x - x, i.z - z) < 50) return 'Overlaps an industry';
     for (const tw of this.towns) if (Math.hypot(tw.x - x, tw.z - z) < 30) return 'Overlaps town centre';
     return null;
@@ -297,17 +300,17 @@ export class World {
     this.world_reseat(x, z, 26);
     this.clearTrees((px, pz) => Math.hypot(px - x, pz - z) < 18);
     this.raze((px, pz) => Math.hypot(px - x, pz - z) < 14);
-    const st = { id: 'S' + this.stationSeq++, type: 'station', depot: true, name, x, y, z, angle, axis: new Vec3(Math.cos(angle), 0, Math.sin(angle)), waiting: {}, cov: this.coverage(x, z), edges: [], served: 0, created: 0 };
+    const st = { id: 'S' + this.stationSeq++, type: 'station', depot: true, name, x, y, z, angle, axis: new Vec3(dcos(angle), 0, dsin(angle)), waiting: {}, cov: this.coverage(x, z), edges: [], served: 0, created: 0 };
     this.stations.push(st);
     this.view?.stationAdded(st);
     return st;
   }
-  addStation(x, z, angle, name) {
+  addStation(x, z, angle, name, len = ECON.platformLen) {
     const t = this.terrain;
     const y = Math.max(2, t.heightAt(x, z));
-    const L = ECON.platformLen;
-    const ca = Math.cos(angle), sa = Math.sin(angle);
-    t.modify(x - 80, z - 80, x + 80, z + 80, (px, pz) => {
+    const L = len, X = (L - ECON.platformLen) / 2; // (X: how much further a long station reaches)
+    const ca = dcos(angle), sa = dsin(angle);
+    t.modify(x - 80 - X, z - 80 - X, x + 80 + X, z + 80 + X, (px, pz) => {
       const dx = px - x, dz = pz - z;
       const lx = dx * ca + dz * sa, lz = -dx * sa + dz * ca; // local coords (x along platform)
       const ox = Math.max(0, Math.abs(lx) - (L / 2 + 44)), oz = Math.max(0, Math.abs(lz + 1) - 26);
@@ -315,8 +318,8 @@ export class World {
       if (d > 28) return null;
       return { h: y - 0.15, w: smoothstep(28, 0, d), mark: d < 2 ? 1 : 0 };
     });
-    this.world_reseat(x, z, 90);
-    this.clearTrees((px, pz) => Math.hypot(px - x, pz - z) < 70);
+    this.world_reseat(x, z, 90 + X);
+    this.clearTrees((px, pz) => Math.hypot(px - x, pz - z) < 70 + X);
     // demolish town buildings on the station footprint
     this.raze((px, pz) => {
       const dx = px - x, dz = pz - z;
@@ -324,6 +327,7 @@ export class World {
       return Math.abs(lx) < L / 2 + 24 && lz > -30 && lz < 28;
     });
     const st = { id: 'S' + this.stationSeq++, type: 'station', name, x, y, z, angle, waiting: {}, cov: this.coverage(x, z), edges: [], served: 0, created: 0 };
+    if (len !== ECON.platformLen) st.len = len; // a long station (track.js halfOf)
     // axis direction (world) along platform
     st.axis = new Vec3(ca, 0, sa);
     this.stations.push(st);
@@ -331,7 +335,7 @@ export class World {
     return st;
   }
   // what a station here would be, for planning track to it before it is built
-  stationStub(x, z, angle) { return { type: 'station', stub: true, x, y: Math.max(2, this.terrain.heightAt(x, z)), z, angle, axis: new Vec3(Math.cos(angle), 0, Math.sin(angle)), edges: [] }; }
+  stationStub(x, z, angle, len = ECON.platformLen) { return { type: 'station', stub: true, x, y: Math.max(2, this.terrain.heightAt(x, z)), z, angle, axis: new Vec3(dcos(angle), 0, dsin(angle)), edges: [], ...(len !== ECON.platformLen ? { len } : {}) }; }
   world_reseat(x, z, r) { this.reseatTrees(x - r, z - r, x + r, z + r); }
   activateIndustry(ind) {
     ind.dormant = false;

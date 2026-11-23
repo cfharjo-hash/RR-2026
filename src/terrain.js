@@ -1,4 +1,5 @@
 // The terrain heightfield (pure data; drawn by view/terrainView.js)
+import { sin as dsin, cos as dcos } from './dmath.js';
 import { makeNoise2D, mulberry32, smoothstep, clamp, lerp } from './util.js';
 import { ContinentShape, CONTINENT } from './continent.js';
 
@@ -33,8 +34,8 @@ export class Terrain {
   }
   riverX(z) {
     const v = this.river;
-    if (!v) return -180 + 360 * Math.sin(z / 650) + 160 * Math.sin(z / 230 + 1.3);
-    return v.base + v.a1 * Math.sin(z / v.f1 + v.p1) + v.a2 * Math.sin(z / v.f2 + v.p2);
+    if (!v) return -180 + 360 * dsin(z / 650) + 160 * dsin(z / 230 + 1.3);
+    return v.base + v.a1 * dsin(z / v.f1 + v.p1) + v.a2 * dsin(z / v.f2 + v.p2);
   }
   riverDist(x, z) {
     if (this.cont) return this.cont.riverDistN(x / this.half, z / this.half) * this.half;

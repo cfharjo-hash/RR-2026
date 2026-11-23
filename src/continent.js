@@ -2,6 +2,7 @@
 // mountain ranges, rivers, lakes, regions, cities) with generated detail on top. Pure: the terrain asks it for heights,
 // the world for regions and cities. Coordinates are normalised: u from -1 (Pacific) to 1 (Atlantic), v from -1 (north)
 // to 1 (south). Real geography is the model; every name here is invented.
+import { pow as dpow } from './dmath.js';
 import { makeNoise2D, mulberry32, smoothstep, clamp, lerp } from './util.js';
 
 export const CONTINENT = { S: 12000, N: 480 };
@@ -85,7 +86,7 @@ export class ContinentShape {
       if (d < R.w * 1.6) {
         const k = 1 - smoothstep(0, R.w, d);
         let ridge = 1 - Math.abs(this.n1(u * 24 + 7, v * 24 - 3)); ridge *= ridge;
-        base += R.h * Math.pow(k, 1.4) * (0.55 + 0.45 * ridge) + R.h * 0.15 * k * this.fbm(this.n2, u * 30, v * 30, 3);
+        base += R.h * dpow(k, 1.4) * (0.55 + 0.45 * ridge) + R.h * 0.15 * k * this.fbm(this.n2, u * 30, v * 30, 3);
       }
     }
     let h = lerp(Math.max(-60, -12 + 160 * sd), base, land); // (the sea floor deepens away from the coast)

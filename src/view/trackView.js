@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { smoothstep, mulberry32 } from '../util.js';
 import { PartBuilder, canvasTexture } from './gfx.js';
-import { DOUBLE_OFF, PLATFORM2, SWITCH_LEN, HALF, tangentAt, LIGHT_SIGNALS_YEAR } from '../track.js';
+import { DOUBLE_OFF, PLATFORM2, SWITCH_LEN, halfOf, tangentAt, LIGHT_SIGNALS_YEAR } from '../track.js';
 
 const ballastTex = canvasTexture(128, (g, s) => {
   const r = mulberry32(9);
@@ -38,7 +38,7 @@ const SHARED_GEO = new Set([sleeperGeo, signalPostGeo, lightGeo, semPoleGeo, sem
 const RED = 0, YELLOW = 1, GREEN = 2;
 const ARM_ANGLE = [0, Math.PI / 4, Math.PI / 2 * 0.96];
 const JHOME = 45; // a junction's signal stands where trains wait for it (the switch zone JZONE in sim.js + 5)
-const homeOff = (node) => node.type === 'junction' ? JHOME : HALF + SWITCH_LEN * 1.6 + 10 + 6; // (station: before the throat)
+const homeOff = (node) => node.type === 'junction' ? JHOME : halfOf(node) + SWITCH_LEN * 1.6 + 10 + 6; // (station: before the throat)
 const diamondGeo = new THREE.BoxGeometry(7.5, 0.12, 7.5), diamondMat = new THREE.MeshStandardMaterial({ color: '#4a4038', roughness: 0.9 });
 // the planning preview: a ribbon coloured along its length by grade (green on the flat, yellow, orange near the
 // limit, red beyond), so you see where a route is too steep; bridges are drawn blue and wider, cuttings purple;
@@ -144,8 +144,8 @@ export class TrackView {
     const { pts, cum, length: total, bridge } = edge;
     const group = new THREE.Group();
     let i0 = 0, i1 = pts.length - 1;
-    if (edge.a.type === 'station') while (i0 < pts.length - 1 && cum[i0] < HALF - 1) i0++;
-    if (edge.b.type === 'station') while (i1 > 0 && total - cum[i1] < HALF - 1) i1--;
+    if (edge.a.type === 'station') while (i0 < pts.length - 1 && cum[i0] < halfOf(edge.a) - 1) i0++;
+    if (edge.b.type === 'station') while (i1 > 0 && total - cum[i1] < halfOf(edge.b) - 1) i1--;
     if (i1 > i0) {
       if (edge.double) { this.addTrackMeshes(group, this.offsetLine(edge, DOUBLE_OFF), i0, i1); this.addTrackMeshes(group, this.offsetLine(edge, -DOUBLE_OFF), i0, i1); }
       else this.addTrackMeshes(group, pts, i0, i1);
@@ -203,7 +203,7 @@ export class TrackView {
 
   // station: main track + a second platform track with switches at both ends
   stationTrack(st) {
-    const g = new THREE.Group();
+    const g = new THREE.Group(), HALF = halfOf(st);
     const lz = new THREE.Vector3(-st.axis.z, 0, st.axis.x);
     const P = (x, z) => new THREE.Vector3(st.x + st.axis.x * x + lz.x * z, st.y, st.z + st.axis.z * x + lz.z * z);
     const main = []; for (let s = -HALF - 2; s <= HALF + 2; s += 2) main.push(P(s, 0));

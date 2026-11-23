@@ -68,6 +68,28 @@ export const WAGONS = {
   tanklorry: { name: 'Tank body',         year: 9999, tare: 0, cost: 0, road: true },
   bus:       { name: 'Bus body',          year: 9999, tare: 0, cost: 0, road: true },
 };
+// Later cars, continental rules only (useRules adds them): each carries what an older type (like) carries, mult
+// times as much (capacities derived in useRules). Classic games keep the original cars exactly.
+const ERA_WAGONS = {
+  steelbox:   { name: 'Steel boxcar',                 year: 1905, tare: 20, cost: 8000,  like: 'box',      mult: 1.6, rules: 'continental' },
+  steelhop:   { name: 'Steel hopper',                 year: 1905, tare: 19, cost: 7500,  like: 'hopper',   mult: 1.7, rules: 'continental' },
+  steelcoach: { name: 'Steel heavyweight coach',      year: 1910, tare: 38, cost: 14000, like: 'coach',    mult: 1.4, rules: 'continental' },
+  steeltank:  { name: 'Steel tank car',               year: 1910, tare: 22, cost: 9500,  like: 'tank',     mult: 1.6, rules: 'continental' },
+  steelreefer:{ name: 'Steel refrigerator car',       year: 1925, tare: 26, cost: 12000, like: 'reefer',   mult: 1.5, rules: 'continental' },
+  covhopper:  { name: 'Covered hopper',               year: 1935, tare: 24, cost: 11000, like: 'hopper',   mult: 2.2, rules: 'continental' },
+  streamcoach:{ name: 'Streamlined coach',            year: 1936, tare: 30, cost: 22000, like: 'coach',    mult: 1.6, rules: 'continental' },
+  bulkflat:   { name: 'Bulkhead flatcar',             year: 1950, tare: 22, cost: 10000, like: 'flat',     mult: 2.2, rules: 'continental' },
+  piggyback:  { name: 'Piggyback flatcar (TOFC)',     year: 1955, tare: 28, cost: 15000, like: 'box',      mult: 2.4, rules: 'continental' },
+  trilevel:   { name: 'Tri-level autorack',           year: 1960, tare: 40, cost: 26000, like: 'autorack', mult: 2.0, rules: 'continental' },
+  hicube:     { name: 'High-cube boxcar',             year: 1965, tare: 32, cost: 18000, like: 'box',      mult: 2.8, rules: 'continental' },
+  bigtank:    { name: 'Jumbo tank car',               year: 1965, tare: 38, cost: 20000, like: 'tank',     mult: 2.4, rules: 'continental' },
+  centerbeam: { name: 'Centerbeam flatcar',           year: 1970, tare: 30, cost: 17000, like: 'flat',     mult: 3.0, rules: 'continental' },
+  amfleet:    { name: 'Amfleet coach',                year: 1975, tare: 50, cost: 40000, like: 'coach',    mult: 2.0, rules: 'continental' },
+  superliner: { name: 'Superliner bilevel',           year: 1979, tare: 60, cost: 48000, like: 'coach',    mult: 2.3, rules: 'continental' },
+  wellcar:    { name: 'Double-stack well car',        year: 1984, tare: 40, cost: 60000, like: 'box',      mult: 4.5, rules: 'continental' },
+  bighopper:  { name: '286k covered hopper',          year: 1995, tare: 32, cost: 24000, like: 'hopper',   mult: 3.6, rules: 'continental' },
+  venture:    { name: 'Venture coach',                year: 2018, tare: 45, cost: 52000, like: 'coach',    mult: 2.0, rules: 'continental' },
+};
 // Towns consume these (they also produce passengers & mail)
 const CLASSIC_TOWN_ACCEPTS = ['passengers', 'mail', 'food', 'clothing', 'construction', 'fuel', 'furniture', 'electronics', 'tools', 'automobiles'];
 // Deliveries that make towns grow (growth points per wagonload)
@@ -141,12 +163,59 @@ export function deriveValues() {
 }
 
 // Locomotives unlock by year (era progression). power = tons it can pull up a grade comfortably / 100.
-export const LOCOS = [
+// The classic rule set keeps the demo's four original engines (old saves stay identical).
+const CLASSIC_LOCOS = [
   { id: 'comet',   name: 'Comet 4-4-0',          year: 1850, speed: 34, power: 1.0, cost: 42000, upkeep: 5000, maxCars: 4, color: '#2f5d3a', trim: '#b8332b' },
   { id: 'mogul',   name: 'Hauler 2-6-0',         year: 1850, speed: 28, power: 1.7, cost: 58000, upkeep: 6500, maxCars: 6, color: '#2c2c30', trim: '#b28a2c' },
   { id: 'express', name: 'Meridian 4-4-2',       year: 1858, speed: 50, power: 1.3, cost: 85000, upkeep: 8000, maxCars: 5, color: '#5a2324', trim: '#d4b25a' },
   { id: 'consol',  name: 'Ironside 2-8-0',       year: 1865, speed: 40, power: 2.4, cost: 96000, upkeep: 9000, maxCars: 6, color: '#23303d', trim: '#c7c7c7' },
 ];
+
+// The continental rule set: real North American locomotives 1850–2026, their stats derived from real figures by one
+// formula (research/roster/roster.json → demo/tools/roster-stats.mjs --js). until = last year built new; a type is
+// sold until ten years after that. The ids of the four original engines go to their real counterparts, so saves
+// that hold them still load (comet = 4-4-0, mogul = 2-6-0, express = 4-4-2, consol = 2-8-0).
+const CONT_LOCOS = [
+  { id: 'norris', name: "Norris 4-2-0", year: 1850, until: 1857, role: 'mixed', traction: 'steam', speed: 20, power: 0.6, cost: 18000, upkeep: 2200, maxCars: 3, color: '#2f5d3a', trim: '#b8332b' },
+  { id: 'comet', name: "4-4-0 American", year: 1850, until: 1900, role: 'mixed', traction: 'steam', speed: 33, power: 1, cost: 42000, upkeep: 5000, maxCars: 4, color: '#2f5d3a', trim: '#b8332b' },
+  { id: 'tenwheeler', name: "4-6-0 Ten-Wheeler", year: 1850, until: 1910, role: 'freight', traction: 'steam', speed: 29, power: 1.4, cost: 50000, upkeep: 6000, maxCars: 4, color: '#2c2c30', trim: '#b28a2c' },
+  { id: 'mogul', name: "2-6-0 Mogul", year: 1860, until: 1910, role: 'freight', traction: 'steam', speed: 26, power: 1.6, cost: 51000, upkeep: 6100, maxCars: 5, color: '#2c2c30', trim: '#b28a2c' },
+  { id: 'consol', name: "2-8-0 Consolidation", year: 1866, until: 1920, role: 'freight', traction: 'steam', speed: 23, power: 1.8, cost: 51000, upkeep: 6100, maxCars: 5, color: '#2c2c30', trim: '#b28a2c' },
+  { id: 'express', name: "4-4-2 Atlantic", year: 1894, until: 1914, role: 'passenger', traction: 'steam', speed: 52, power: 1.7, cost: 97000, upkeep: 11600, maxCars: 5, color: '#5a2324', trim: '#d4b25a' },
+  { id: 'pacific', name: "4-6-2 Pacific (PRR K4s)", year: 1902, until: 1928, role: 'passenger', traction: 'steam', speed: 57, power: 2.5, cost: 146000, upkeep: 17500, maxCars: 6, color: '#5a2324', trim: '#d4b25a' },
+  { id: 'santafe', name: "2-10-2 Santa Fe", year: 1903, until: 1930, role: 'freight', traction: 'steam', speed: 26, power: 3.4, cost: 97000, upkeep: 11600, maxCars: 7, color: '#2c2c30', trim: '#b28a2c' },
+  { id: 'mikado', name: "2-8-2 Mikado (USRA Light)", year: 1905, until: 1944, role: 'freight', traction: 'steam', speed: 33, power: 2.9, cost: 104000, upkeep: 12500, maxCars: 6, color: '#2c2c30', trim: '#b28a2c' },
+  { id: 'mallet', name: "2-6-6-2 Mallet", year: 1906, until: 1949, role: 'freight', traction: 'steam', speed: 23, power: 3.5, cost: 90000, upkeep: 10800, maxCars: 7, color: '#2c2c30', trim: '#b28a2c' },
+  { id: 'mountain', name: "4-8-2 Mountain", year: 1911, until: 1945, role: 'mixed', traction: 'steam', speed: 46, power: 3, cost: 142000, upkeep: 17000, maxCars: 6, color: '#2f5d3a', trim: '#b8332b' },
+  { id: 'berkshire', name: "2-8-4 Berkshire", year: 1925, until: 1949, role: 'freight', traction: 'steam', speed: 46, power: 3.3, cost: 154000, upkeep: 18500, maxCars: 7, color: '#2c2c30', trim: '#b28a2c' },
+  { id: 'northern', name: "4-8-4 Northern", year: 1927, until: 1950, role: 'mixed', traction: 'steam', speed: 52, power: 3.2, cost: 166000, upkeep: 19900, maxCars: 7, color: '#2f5d3a', trim: '#b8332b' },
+  { id: 'hudson', name: "4-6-4 Hudson (NYC J-3a)", year: 1927, until: 1938, role: 'passenger', traction: 'steam', speed: 59, power: 2.4, cost: 145000, upkeep: 17400, maxCars: 6, color: '#5a2324', trim: '#d4b25a' },
+  { id: 'zephyr', name: "Pioneer Zephyr", year: 1934, until: 1939, role: 'passenger', traction: 'diesel', speed: 59, power: 1.6, cost: 103000, upkeep: 7200, maxCars: 3, color: '#8c2f2a', trim: '#d9d4c8' },
+  { id: 'gg1', name: "PRR GG1", year: 1934, until: 1943, role: 'passenger', traction: 'electric', speed: 65, power: 3.2, cost: 201000, upkeep: 12100, maxCars: 7, color: '#3a4048', trim: '#c9a24a' },
+  { id: 'hiawatha', name: "Milwaukee Road A (Hiawatha)", year: 1935, until: 1937, role: 'passenger', traction: 'steam', speed: 65, power: 2, cost: 135000, upkeep: 16200, maxCars: 5, color: '#5a2324', trim: '#d4b25a' },
+  { id: 'challenger', name: "4-6-6-4 Challenger", year: 1936, until: 1944, role: 'freight', traction: 'steam', speed: 46, power: 4, cost: 181000, upkeep: 21700, maxCars: 8, color: '#2c2c30', trim: '#b28a2c' },
+  { id: 'ft', name: "EMD FT (A-B-B-A set)", year: 1939, until: 1945, role: 'freight', traction: 'diesel', speed: 42, power: 6.7, cost: 260000, upkeep: 18200, maxCars: 11, color: '#2f4f80', trim: '#e3c15a' },
+  { id: 'gs4', name: "SP GS-4 Daylight", year: 1941, until: 1942, role: 'passenger', traction: 'steam', speed: 59, power: 3.2, cost: 185000, upkeep: 22200, maxCars: 7, color: '#5a2324', trim: '#d4b25a' },
+  { id: 'bigboy', name: "4-8-8-4 Big Boy", year: 1941, until: 1944, role: 'freight', traction: 'steam', speed: 39, power: 4.9, cost: 187000, upkeep: 22400, maxCars: 9, color: '#2c2c30', trim: '#b28a2c' },
+  { id: 'e8', name: "EMD E8 (A-A set)", year: 1945, until: 1954, role: 'passenger', traction: 'diesel', speed: 64, power: 4.3, cost: 255000, upkeep: 17900, maxCars: 8, color: '#8c2f2a', trim: '#d9d4c8' },
+  { id: 'pa', name: "ALCO PA", year: 1946, until: 1953, role: 'passenger', traction: 'diesel', speed: 65, power: 4.2, cost: 253000, upkeep: 17700, maxCars: 8, color: '#8c2f2a', trim: '#d9d4c8' },
+  { id: 'f7', name: "EMD F7 (A-B-B set)", year: 1949, until: 1953, role: 'freight', traction: 'diesel', speed: 42, power: 5.8, cost: 230000, upkeep: 16100, maxCars: 10, color: '#2f4f80', trim: '#e3c15a' },
+  { id: 'gp9', name: "EMD GP9 (pair)", year: 1954, until: 1963, role: 'freight', traction: 'diesel', speed: 42, power: 4.3, cost: 178000, upkeep: 12500, maxCars: 8, color: '#2f4f80', trim: '#e3c15a' },
+  { id: 'gtel', name: "UP GTEL 8,500 hp turbine", year: 1958, until: 1961, role: 'freight', traction: 'turbine', speed: 42, power: 6.4, cost: 250000, upkeep: 27500, maxCars: 11, color: '#6a6a5a', trim: '#d9a441' },
+  { id: 'u25b', name: "GE U25B (set of 3)", year: 1960, until: 1966, role: 'freight', traction: 'diesel', speed: 46, power: 6.1, cost: 259000, upkeep: 18100, maxCars: 10, color: '#2f4f80', trim: '#e3c15a' },
+  { id: 'sd402', name: "EMD SD40-2 (set of 3)", year: 1972, until: 1989, role: 'freight', traction: 'diesel', speed: 42, power: 7.5, cost: 286000, upkeep: 20000, maxCars: 12, color: '#2f4f80', trim: '#e3c15a' },
+  { id: 'f40ph', name: "EMD F40PH", year: 1976, until: 1992, role: 'passenger', traction: 'diesel', speed: 67, power: 2.3, cost: 156000, upkeep: 10900, maxCars: 5, color: '#8c2f2a', trim: '#d9d4c8' },
+  { id: 'aem7', name: "EMD/ASEA AEM-7", year: 1980, until: 1988, role: 'passenger', traction: 'electric', speed: 81, power: 2.8, cost: 216000, upkeep: 13000, maxCars: 6, color: '#3a4048', trim: '#c9a24a' },
+  { id: 'dash9', name: "GE Dash 9-44CW (set of 3)", year: 1994, until: 2004, role: 'freight', traction: 'diesel', speed: 46, power: 8.3, cost: 337000, upkeep: 23600, maxCars: 13, color: '#2f4f80', trim: '#e3c15a' },
+  { id: 'acela', name: "Acela Express", year: 2000, until: 2006, role: 'passenger', traction: 'electric', speed: 98, power: 4.1, cost: 351000, upkeep: 21100, maxCars: 6, color: '#3a4048', trim: '#c9a24a' },
+  { id: 'es44ac', name: "GE ES44AC (set of 3)", year: 2005, until: null, role: 'freight', traction: 'diesel', speed: 46, power: 11.4, cost: 441000, upkeep: 30900, maxCars: 16, color: '#2f4f80', trim: '#e3c15a' },
+  { id: 'sd70t4', name: "EMD SD70ACe-T4 (set of 3)", year: 2015, until: null, role: 'freight', traction: 'diesel', speed: 49, power: 11.7, cost: 475000, upkeep: 33300, maxCars: 16, color: '#2f4f80', trim: '#e3c15a' },
+  { id: 'charger', name: "Siemens Charger SC-44", year: 2017, until: null, role: 'passenger', traction: 'diesel', speed: 81, power: 3.2, cost: 242000, upkeep: 16900, maxCars: 7, color: '#8c2f2a', trim: '#d9d4c8' },
+  { id: 'flxdrive', name: "Wabtec FLXdrive (battery set)", year: 2021, until: null, role: 'freight', traction: 'battery', speed: 49, power: 11.3, cost: 462000, upkeep: 23100, maxCars: 16, color: '#4a6a4a', trim: '#e3e3d8' },
+  { id: 'avelia', name: "Avelia Liberty (NextGen Acela)", year: 2025, until: null, role: 'passenger', traction: 'electric', speed: 104, power: 4.6, cost: 408000, upkeep: 24500, maxCars: 8, color: '#3a4048', trim: '#c9a24a' },
+];
+// the rule set's locomotives (filled by useRules)
+export const LOCOS = [];
 
 // Ships. A ship's hold is described as wagon-equivalents, so any cargo that fits that wagon type fits the hold.
 // speed in mph, cost/upkeep in 1850 dollars (inflate). fullLoad: waits at its first stop until the hold is mostly full.
@@ -343,8 +412,8 @@ const CONT_WARS = [
   { from: 1917, to: 1918, mul: 3, name: 'the Great War overseas' },
 ];
 const SETS = {
-  classic: { cargo: CLASSIC_CARGO, accepts: CLASSIC_TOWN_ACCEPTS, growth: CLASSIC_TOWN_GROWTH, demand: CLASSIC_TOWN_DEMAND, industry: CLASSIC_INDUSTRY },
-  continental: { cargo: CONT_CARGO, accepts: CONT_TOWN_ACCEPTS, growth: CONT_TOWN_GROWTH, demand: CONT_TOWN_DEMAND, industry: CONT_INDUSTRY, wars: CONT_WARS },
+  classic: { cargo: CLASSIC_CARGO, accepts: CLASSIC_TOWN_ACCEPTS, growth: CLASSIC_TOWN_GROWTH, demand: CLASSIC_TOWN_DEMAND, industry: CLASSIC_INDUSTRY, locos: CLASSIC_LOCOS },
+  continental: { cargo: CONT_CARGO, accepts: CONT_TOWN_ACCEPTS, growth: CONT_TOWN_GROWTH, demand: CONT_TOWN_DEMAND, industry: CONT_INDUSTRY, wars: CONT_WARS, locos: CONT_LOCOS },
 };
 // Put a rule set in play (before a map is made). New games use 'continental'; saves from before it existed use 'classic'.
 export function useRules(name = 'continental') {
@@ -353,6 +422,12 @@ export function useRules(name = 'continental') {
   const fill = (target, src) => { for (const k of Object.keys(target)) delete target[k]; Object.assign(target, structuredClone(src)); };
   RULES.wars = set.wars || [];
   fill(CARGO, set.cargo); fill(INDUSTRY, set.industry); fill(TOWN_GROWTH, set.growth); fill(TOWN_DEMAND, set.demand);
+  LOCOS.length = 0; LOCOS.push(...structuredClone(set.locos));
+  // later cars: only in the rule set they belong to; each carries what an older type carries, times mult
+  for (const k of Object.keys(ERA_WAGONS)) delete WAGONS[k];
+  if (RULES.name === 'continental') Object.assign(WAGONS, structuredClone(ERA_WAGONS));
+  for (const [k, w] of Object.entries(WAGONS)) if (w.like && w.rules === RULES.name)
+    for (const c of Object.values(CARGO)) if (c.cap[w.like]) c.cap[k] = Math.round(c.cap[w.like] * w.mult);
   TOWN_ACCEPTS.length = 0; TOWN_ACCEPTS.push(...set.accepts);
   // road capacities: a horse cart carries about 30% of a rail wagon, a lorry body about 60% (liquids in tank bodies)
   for (const c of Object.values(CARGO)) {

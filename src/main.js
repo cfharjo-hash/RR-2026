@@ -3,7 +3,7 @@ import { MapControls } from 'three/addons/controls/MapControls.js';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { TerrainView } from './view/terrainView.js';
 import { WorldView } from './view/worldView.js';
-import { JUNCTION_COST, SIGNAL_COST, MAX_GRADE, SIGHT, BRAKE, stopDistance } from './track.js';
+import { JUNCTION_COST, SIGNAL_COST, MAX_GRADE, SIGHT, BRAKE, stopDistance, halfOf } from './track.js';
 import { createGame, generateMap, newGame } from './setup.js';
 import { TrackView } from './view/trackView.js';
 import { VehicleView } from './view/vehicleView.js';
@@ -13,7 +13,7 @@ import { ECON, FEATURES, RULES } from './data.js';
 // ?dlc=1: switch on the transport modes held back for an expansion (ships, aircraft, roads)
 if (new URLSearchParams(location.search).get('dlc') === '1') Object.assign(FEATURES, { ships: true, planes: true, roads: true });
 import { UI } from './ui.js';
-import { money, mapSeeds, MAP_MAX, MAP_GEN } from './util.js';
+import { money, mapSeeds, MAP_MAX, MAP_GENS } from './util.js';
 import { writeSlot, readSlot, queueLoad, takePending } from './save.js';
 
 // ---------------- renderer / scene ----------------
@@ -56,13 +56,13 @@ const step = (msg) => { loadEl.textContent = msg; return new Promise(r => setTim
 // the map: a loaded save brings its own seeds; a new game uses ?map=N (0 = the original map, 'random' = pick one)
 let pending = takePending();
 let pendingErr = null;
-if ((pending?.seeds?.map || pending?.seeds?.kind) && (pending.seeds.gen || 1) !== MAP_GEN) { pendingErr = 'This save was made with an older map generator and can’t be rebuilt'; pending = null; }
+if ((pending?.seeds?.map || pending?.seeds?.kind) && !MAP_GENS.includes(pending.seeds.gen || 1)) { pendingErr = 'This save was made with an older map generator and can’t be rebuilt'; pending = null; }
 const qs0 = new URLSearchParams(location.search);
 let mapArg = qs0.get('map');
 if (mapArg === 'random') mapArg = 1 + Math.floor(Math.random() * MAP_MAX);
 // the world: a save's own (a classic 3 km map unless it says continent); a new game is the continent unless ?world=classic
 const worldKind = pending ? (pending.seeds?.kind || 'classic') : (qs0.get('world') === 'classic' ? 'classic' : 'continent');
-const seeds = { ...(pending ? (pending.seeds?.map || pending.seeds?.kind ? { map: pending.seeds.map || 0, terrain: pending.seeds.terrain, world: pending.seeds.world } : mapSeeds(0)) : mapSeeds(mapArg)), kind: worldKind }; // (saves without a map number are map 0)
+const seeds = { ...(pending ? (pending.seeds?.map || pending.seeds?.kind ? { map: pending.seeds.map || 0, terrain: pending.seeds.terrain, world: pending.seeds.world } : mapSeeds(0)) : mapSeeds(mapArg)), kind: worldKind, ...(pending ? { gen: pending.seeds?.gen || 1 } : {}) }; // (saves without a map number are map 0)
 if (seeds.map) qs0.set('map', seeds.map); else qs0.delete('map'); // the address always names the map in play (so New game keeps it)
 if (worldKind === 'classic') qs0.set('world', 'classic'); else qs0.delete('world');
 if (qs0.toString() !== location.search.replace(/^\?/, '')) history.replaceState(null, '', location.pathname + (qs0.toString() ? '?' + qs0 : ''));
@@ -190,7 +190,7 @@ const snapMark = new THREE.Mesh(new THREE.TorusGeometry(7, 0.9, 6, 32), new THRE
 snapMark.rotation.x = Math.PI / 2; snapMark.renderOrder = 11; snapMark.visible = false; scene.add(snapMark);
 const showSnap = (o) => { snapMark.visible = !!o; if (o) { const q = o.p || o; snapMark.position.set(q.x, (q.y ?? terrain.heightAt(q.x, q.z)) + 2, q.z); } };
 
-const tool = { mode: 'select', angle: 0, from: null, wps: [], plan: null, hover: null, orders: [], buy: null, double: false, grade: MAX_GRADE };
+const tool = { mode: 'select', angle: 0, len: ECON.platformLen, from: null, wps: [], plan: null, hover: null, orders: [], buy: null, double: false, grade: MAX_GRADE };
 // the grade limits the track tool offers ( [ flatter, ] steeper ): flatter lines cost more (cuttings, embankments,
 // bridges) but loaded trains climb them much faster
 const GRADES = [0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05, MAX_GRADE];
@@ -209,7 +209,7 @@ function snapPoint(p) {
   } else if (from.type === 'station' && from.axis && tool.mode === 'track') {
     const side = Math.sign((p.x - from.x) * from.axis.x + (p.z - from.z) * from.axis.z) || 1;
     dir = { x: from.axis.x * side, z: from.axis.z * side };
-    last = { x: from.x + dir.x * (ECON.platformLen / 2 + 22), z: from.z + dir.z * (ECON.platformLen / 2 + 22) };
+    last = { x: from.x + dir.x * (halfOf(from) + 22), z: from.z + dir.z * (halfOf(from) + 22) };
   } else if (from.type === 'jc' && from.t) {
     const side = Math.sign((p.x - from.p.x) * from.t.x + (p.z - from.p.z) * from.t.z) || 1;
     dir = { x: from.t.x * side, z: from.t.z * side };
@@ -338,10 +338,10 @@ function onMove(e) {
   if (tool.mode === 'station') {
     if (!p) { ghost.visible = false; ring.visible = false; ui.tooltip(null); return; }
     ghost.visible = true; ghost.position.set(p.x, Math.max(p.y, 2), p.z); ghost.rotation.y = -tool.angle;
-    const err = world.stationCheck(p.x, p.z) || (net.stationClear(p.x, p.z, tool.angle) ? null : 'The station would sit on existing track');
+    const err = world.stationCheck(p.x, p.z, tool.len) || (net.stationClear(p.x, p.z, tool.angle, tool.len) ? null : 'The station would sit on existing track');
     ghostMat.color.set(err ? '#ff5a4a' : '#6dff8e');
     updateRing(p.x, p.z, ECON.catchment);
-    ui.stationTooltip(p, err, e.clientX, e.clientY);
+    ui.stationTooltip(p, err, e.clientX, e.clientY, tool.len);
   } else if (tool.mode === 'track') {
     const s = stationNear(p, 75), jc = s ? null : net.nearestTrack(p, 16, branchable);
     showSnap(s || (jc && !jc.bad ? jc : null));
@@ -435,9 +435,9 @@ function onClick(e) {
     }
     case 'station': {
       if (!p) return;
-      const r = game.buildStation(p.x, p.z, tool.angle);
+      const r = game.buildStation(p.x, p.z, tool.angle, tool.len);
       if (typeof r === 'string') ui.toast(r, true);
-      else { ui.toast(`${r.name} built (${money(ECON.stationCost)})`); onMove(e); }
+      else { ui.toast(`${r.name} built (${money(game.stationCost(tool.len))})`); onMove(e); }
       break;
     }
     case 'track': {
@@ -531,6 +531,10 @@ function onKey(e) {
   else if (['[', ']', '-', '+', '='].includes(k) && tool.mode === 'track' && !e.ctrlKey && !e.metaKey && !e.altKey) api.setGrade(k === '[' || k === '-' ? -1 : 1); // (− and + for keyboards where [ ] need AltGr)
   else if (k === 'g') { tool.double = !tool.double; ui.setToolUI(tool.mode); if (tool.mode === 'track') onMove({ clientX: lastMouse.x, clientY: lastMouse.y, target: renderer.domElement }); }
   else if (k === 'p') ui.openChain();
+  else if (k === 'l' && tool.mode === 'station') { // platform length: standard → long → grand
+    tool.len = { 64: 128, 128: 192, 192: 64 }[tool.len]; ghost.geometry.dispose(); ghost.geometry = stationModel(tool.len); ui.setToolUI('station');
+    onMove({ clientX: lastMouse.x, clientY: lastMouse.y, target: renderer.domElement });
+  }
   else if (k === 'l') ui.openLedger();
   else if (k === 'o') ui.openSaves();
   else if (k === 'm') ui.openMarkets();
